@@ -84,6 +84,7 @@ class STTService:
             STTListener,
             _MoonshineListenerAdapter,
         ] = {}
+        self._listeners: set[STTListener] = set()
 
         self._audio_queue: queue.Queue[QueueItem] = queue.Queue(
             maxsize=self._config.queue_size
@@ -113,6 +114,11 @@ class STTService:
         )
 
         self._stream.start()
+
+        for listener in self._listeners:
+            adapter = _MoonshineListenerAdapter(listener)
+            self._listener_adapters[listener] = adapter
+            self._stream.add_listener(adapter)
 
         self._shutdown.clear()
 
@@ -164,7 +170,13 @@ class STTService:
         logger.info("STTService stopped.")
 
     def add_listener(self, listener: STTListener) -> None:
-        self._require_started()
+        if listener in self._listeners:
+            return
+
+        self._listeners.add(listener)
+
+        if self._stream is None:
+            return
 
         adapter = _MoonshineListenerAdapter(listener)
         self._listener_adapters[listener] = adapter
@@ -172,14 +184,15 @@ class STTService:
         self._stream.add_listener(adapter)
 
     def remove_listener(self, listener: STTListener) -> None:
-        self._require_started()
+        self._listeners.discard(listener)
 
         adapter = self._listener_adapters.pop(listener, None)
 
         if adapter is None:
             return
 
-        self._stream.remove_listener(adapter)
+        if self._stream is not None:
+            self._stream.remove_listener(adapter)
 
     def push(self, audio_data: AudioBuffer, sample_rate: int) -> None:
         """

@@ -5,7 +5,8 @@ import numpy as np
 import sounddevice as sd
 
 from services.conversation.src import ConversationManager
-from services.stt.src import STTService
+from services.stt.src import STTService, AudioQueueFull
+from services.llm.src import LLMProvider, LLMProviderConfig, LLMService
 
 
 logging.basicConfig(
@@ -17,10 +18,17 @@ logger = logging.getLogger(__name__)
 
 
 stt = STTService()
-stt.start()
+provider = LLMProvider(
+    LLMProviderConfig(),
+)
 
-manager = ConversationManager(stt)
+llm = LLMService(provider)
+
+manager = ConversationManager(stt, llm)
+
+llm.start()
 manager.start()
+stt.start()
 
 
 def audio_callback(indata, frames, time_info, status):
@@ -28,7 +36,10 @@ def audio_callback(indata, frames, time_info, status):
         logger.warning(status)
 
     audio = indata.astype(np.float32).flatten()
-    stt.push(audio, 16000)
+    try:
+        stt.push(audio, 16000)
+    except AudioQueueFull:
+        pass
 
 
 stream = sd.InputStream(
@@ -54,8 +65,9 @@ finally:
     stream.stop()
     stream.close()
 
-    manager.stop()
     stt.stop()
+    manager.stop()
+    llm.stop()
 
     print("\nConversation History")
     print("--------------------")

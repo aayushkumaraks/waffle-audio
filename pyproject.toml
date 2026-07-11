@@ -5,6 +5,7 @@ description = "Voice-to-voice AI assistant"
 requires-python = ">=3.11"
 
 dependencies = [
+    "httpx>=0.28.1",
     "moonshine-voice",
     "numpy>=2.0",
     "sounddevice",

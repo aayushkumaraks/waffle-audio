@@ -2,7 +2,9 @@
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
   "python.analysis.extraPaths": [
     "${workspaceFolder}/services/stt/src",
-    "${workspaceFolder}/services/conversation/src"
+    "${workspaceFolder}/services/conversation/src",
+    "${workspaceFolder}/services/llm/src",
+    "${workspaceFolder}/models/"
   ],
   "python.analysis.autoSearchPaths": true,
   "python.analysis.diagnosticMode": "workspace"

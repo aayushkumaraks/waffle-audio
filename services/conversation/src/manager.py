@@ -1,20 +1,12 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Literal
+from models import Message
 
 from services.stt.src import STTListener, STTService
+from services.llm.src import LLMListener, LLMService
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(slots=True)
-class Message:
-    """Represents a single message in the conversation."""
-
-    role: Literal["user", "assistant"]
-    content: str
 
 
 class _STTListenerAdapter(STTListener):
@@ -33,11 +25,16 @@ class _STTListenerAdapter(STTListener):
         self._manager._handle_transcript_completed(text)
 
 
-class ConversationManager:
+class ConversationManager(LLMListener):
     """Coordinates the conversation between application services."""
 
-    def __init__(self, stt: STTService) -> None:
+    def __init__(
+        self,
+        stt: STTService,
+        llm: LLMService,
+    ) -> None:
         self._stt = stt
+        self._llm = llm
 
         self._stt_listener = _STTListenerAdapter(self)
 
@@ -52,6 +49,8 @@ class ConversationManager:
             return
 
         self._stt.add_listener(self._stt_listener)
+        self._llm.add_listener(self)
+
         self._started = True
 
         logger.info("ConversationManager started.")
@@ -63,6 +62,8 @@ class ConversationManager:
             return
 
         self._stt.remove_listener(self._stt_listener)
+        self._llm.remove_listener(self)
+
         self._started = False
 
         logger.info("ConversationManager stopped.")
@@ -96,6 +97,33 @@ class ConversationManager:
         self._history.append(
             Message(
                 role="user",
+                content=text,
+            )
+        )
+
+        logger.debug(
+            "Conversation history now contains %d message(s).",
+            len(self._history),
+        )
+
+        self._llm.generate(self._history)
+
+    # ------------------------------------------------------------------
+    # LLM Event Handlers
+    # ------------------------------------------------------------------
+
+    def on_generation_started(self) -> None:
+        logger.debug("LLM generation started.")
+
+    def on_generation_updated(self, text: str) -> None:
+        logger.debug("LLM generation updated.")
+
+    def on_generation_completed(self, text: str) -> None:
+        logger.info("LLM generation completed.")
+
+        self._history.append(
+            Message(
+                role="assistant",
                 content=text,
             )
         )
