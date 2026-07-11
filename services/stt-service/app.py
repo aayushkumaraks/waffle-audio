@@ -2,20 +2,17 @@ import time
 import sounddevice as sd
 import numpy as np
 
-from moonshine_voice import TranscriptEventListener
+from src.stt_service import STTListener, STTService
 
-from src.stt_service import STTService
+class ConsoleListener(STTListener):
+    def on_transcript_started(self, text: str) -> None:
+        print(f"Started: {text}")
 
+    def on_transcript_updated(self, text: str) -> None:
+        print(f"Updating: {text}")
 
-class ConsoleListener(TranscriptEventListener):
-    def on_line_started(self, event):
-        print(f"Started: {event.line.text}")
-
-    def on_line_text_changed(self, event):
-        print(f"Updating: {event.line.text}")
-
-    def on_line_completed(self, event):
-        print(f"Completed: {event.line.text}")
+    def on_transcript_completed(self, text: str) -> None:
+        print(f"Completed: {text}")
 
 
 service = STTService()
@@ -35,6 +32,7 @@ stream = sd.InputStream(
     samplerate=16000,
     channels=1,
     dtype="float32",
+    blocksize=512,
     callback=audio_callback,
 )
 
