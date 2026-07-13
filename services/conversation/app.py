@@ -4,9 +4,11 @@ import time
 import numpy as np
 import sounddevice as sd
 
+from services.audio.src import AudioPlayer
 from services.conversation.src import ConversationManager
-from services.stt.src import STTService, AudioQueueFull
 from services.llm.src import LLMProvider, LLMProviderConfig, LLMService
+from services.stt.src import AudioQueueFull, STTService
+from services.tts.src import TTSConfig, TTSService
 
 
 logging.basicConfig(
@@ -16,16 +18,38 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+MODEL_PATH = "voiceModels/kokoro-v1.0.onnx"
+VOICES_PATH = "voiceModels/voices-v1.0.bin"
+
 
 stt = STTService()
+
 provider = LLMProvider(
     LLMProviderConfig(),
 )
 
 llm = LLMService(provider)
 
-manager = ConversationManager(stt, llm)
+tts = TTSService(
+    TTSConfig(
+        model_path=MODEL_PATH,
+        voices_path=VOICES_PATH,
+    )
+)
 
+player = AudioPlayer()
+
+tts.add_listener(player)
+
+manager = ConversationManager(
+    stt,
+    llm,
+    tts,
+)
+
+
+player.start()
+tts.start()
 llm.start()
 manager.start()
 stt.start()
@@ -36,6 +60,7 @@ def audio_callback(indata, frames, time_info, status):
         logger.warning(status)
 
     audio = indata.astype(np.float32).flatten()
+
     try:
         stt.push(audio, 16000)
     except AudioQueueFull:
@@ -68,6 +93,8 @@ finally:
     stt.stop()
     manager.stop()
     llm.stop()
+    tts.stop()
+    player.stop()
 
     print("\nConversation History")
     print("--------------------")

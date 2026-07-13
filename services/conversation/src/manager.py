@@ -5,6 +5,7 @@ from models import Message
 
 from services.stt.src import STTListener, STTService
 from services.llm.src import LLMListener, LLMService
+from services.tts.src import TTSService
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +33,11 @@ class ConversationManager(LLMListener):
         self,
         stt: STTService,
         llm: LLMService,
+        tts: TTSService,
     ) -> None:
         self._stt = stt
         self._llm = llm
+        self._tts = tts
 
         self._stt_listener = _STTListenerAdapter(self)
 
@@ -94,6 +97,12 @@ class ConversationManager(LLMListener):
     def _handle_transcript_completed(self, text: str) -> None:
         logger.info("Transcript completed: %s", text)
 
+        text = text.strip()
+
+        if not text:
+            logger.debug("Ignoring empty transcript.")
+            return
+
         self._history.append(
             Message(
                 role="user",
@@ -120,6 +129,8 @@ class ConversationManager(LLMListener):
 
     def on_generation_completed(self, text: str) -> None:
         logger.info("LLM generation completed.")
+
+        self._tts.speak(text)
 
         self._history.append(
             Message(

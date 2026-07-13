@@ -1,34 +1,27 @@
 from __future__ import annotations
+
+import logging
 import queue
 import threading
 from typing import TypeAlias
+
+import numpy as np
+
+import sounddevice as sd
+
 from services.tts.src.tts_service import (
     AudioBuffer,
     TTSListener,
 )
-import sounddevice as sd
+
+logger = logging.getLogger(__name__)
 
 _STOP = object()
 
 AudioChunk: TypeAlias = tuple[AudioBuffer, int]
 
+
 class AudioPlayer(TTSListener):
-    
-    def on_synthesis_started(self) -> None:
-        pass
-
-    def on_audio_chunk(
-        self,
-        audio: AudioBuffer,
-        sample_rate: int,
-    ) -> None:
-        self._playback_queue.put_nowait(
-            (audio, sample_rate)
-        )
-
-    def on_synthesis_completed(self) -> None:
-        pass
-
     def __init__(self) -> None:
         self._playback_queue: queue.Queue[AudioChunk | object] = queue.Queue()
 
@@ -57,9 +50,21 @@ class AudioPlayer(TTSListener):
 
         self._worker_thread = None
 
+    def on_synthesis_started(self) -> None:
+        pass
+
+    def on_audio_chunk(
+        self,
+        audio: AudioBuffer,
+        sample_rate: int,
+    ) -> None:
+        self._playback_queue.put_nowait((audio, sample_rate))
+
+    def on_synthesis_completed(self) -> None:
+        pass
+
     def _playback_worker(self) -> None:
         while True:
-
             item = self._playback_queue.get()
 
             if item is _STOP:
@@ -67,5 +72,32 @@ class AudioPlayer(TTSListener):
 
             audio, sample_rate = item
 
-            sd.play(audio, sample_rate)
-            sd.wait()
+            logger.info(
+                "Playing audio (%d samples @ %d Hz)",
+                len(audio),
+                sample_rate,
+            )
+
+            try:
+                stereo_audio = np.column_stack((audio, audio))
+
+                logger.info("Calling blocking play")
+                logger.info(
+                    "audio.shape=%s dtype=%s",
+                    audio.shape,
+                    audio.dtype,
+                )
+
+                with sd.OutputStream(
+                    samplerate=sample_rate,
+                    channels=2,
+                    dtype="float32",
+                ) as stream:
+                    stream.write(stereo_audio)
+
+                logger.info("Returned from blocking play")
+
+                logger.info("Playback finished.")
+
+            except Exception:
+                logger.exception("Audio playback failed.")

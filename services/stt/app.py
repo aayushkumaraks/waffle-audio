@@ -2,7 +2,7 @@ import time
 import sounddevice as sd
 import numpy as np
 
-from src.stt_service import STTListener, STTService
+from .src.stt_service import STTListener, STTService
 
 class ConsoleListener(STTListener):
     def on_transcript_started(self, text: str) -> None:

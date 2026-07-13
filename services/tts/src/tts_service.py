@@ -19,6 +19,10 @@ _STOP = object()
 AudioBuffer: TypeAlias = npt.NDArray[np.float32]
 QueueItem: TypeAlias = str | object
 
+@dataclass(slots=True)
+class TTSConfig:
+    model_path: str
+    voices_path: str
 
 class TTSListener(ABC):
     """Receives streaming synthesis events."""

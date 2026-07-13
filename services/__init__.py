@@ -16,16 +16,23 @@ from .llm.src import (
     LLMService,
     LLMServiceError,
 )
-from .tts.src.tts_service import (
+from .tts.src import (
     SpeechQueueFull,
     TTSConfig,
     TTSListener,
     TTSService,
     TTSServiceError,
 )
+
+from .audio.src import (
+    AudioPlayer,
+)
+
 from .conversation.src import ConversationManager
 
 __all__ = [
+    # Audio
+    "AudioPlayer",
     # STT
     "AudioQueueFull",
     "STTConfig",
