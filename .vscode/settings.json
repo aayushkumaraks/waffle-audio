@@ -4,6 +4,7 @@
     "${workspaceFolder}/services/stt/src",
     "${workspaceFolder}/services/conversation/src",
     "${workspaceFolder}/services/llm/src",
+    "${workspaceFolder}/services/tts/src",
     "${workspaceFolder}/models/"
   ],
   "python.analysis.autoSearchPaths": true,

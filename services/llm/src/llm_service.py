@@ -2,6 +2,9 @@ from abc import ABC, abstractmethod
 from typing import Sequence
 import queue
 import threading
+import logging
+
+logger = logging.getLogger(__name__)
 
 from models import Message
 
@@ -140,7 +143,10 @@ class LLMService(LLMCallbacks):
             if item is _STOP:
                 break
 
-            self._provider.generate(
-                messages=item,
-                callbacks=self,
-            )
+            try:
+                self._provider.generate(
+                    messages=item,
+                    callbacks=self,
+                )
+            except Exception:
+                logger.exception("LLM generation failed.")
