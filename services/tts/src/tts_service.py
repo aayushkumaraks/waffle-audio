@@ -10,6 +10,7 @@ from typing import Optional, TypeAlias
 from kokoro_onnx import Kokoro
 import numpy as np
 import numpy.typing as npt
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +125,6 @@ class TTSService:
         logger.info("Stopping TTSService...")
 
         self._shutdown.set()
-        self._engine = None
 
         try:
             self._speech_queue.put_nowait(_STOP)
@@ -133,6 +133,7 @@ class TTSService:
 
         if self._worker_thread is not None:
             self._worker_thread.join(timeout=5)
+            self._engine = None
 
             if self._worker_thread.is_alive():
                 logger.error(
@@ -185,25 +186,49 @@ class TTSService:
         if listener in self._listeners:
             self._listeners.remove(listener)
 
+    async def _synthesize(
+        self,
+        text: str,
+    ) -> None:
+
+        assert self._engine is not None
+
+
+        logger.info("Synthesizing: %s", text)
+
+        async for audio, sample_rate in self._engine.create_stream(
+            text=text,
+            voice=self._config.voice,
+            speed=self._config.speed,
+            lang=self._config.language,
+        ):
+            self._dispatch_audio_chunk(
+                audio,
+                sample_rate,
+            )
+
+        logger.info("Synthesis complete.")
+
     def _process_speech_queue(self) -> None:
         """Process queued speech requests."""
 
         while True:
+            
+            logger.info("Worker waiting for speech...")
+
             item = self._speech_queue.get()
 
             if item is _STOP:
                 break
 
-            #
-            # Kokoro synthesis will be implemented here.
-            #
-            # Eventually this method will:
-            #
-            #   1. Notify synthesis started.
-            #   2. Stream PCM chunks from Kokoro.
-            #   3. Dispatch chunks to listeners.
-            #   4. Notify synthesis completed.
-            #
+            assert isinstance(item, str)
+            text = item
+
+            try:
+                asyncio.run(self._synthesize(text))
+
+            except Exception:
+                logger.exception("Speech synthesis failed.")
 
     def _dispatch_synthesis_started(self) -> None:
         for listener in tuple(self._listeners):
@@ -214,6 +239,7 @@ class TTSService:
         audio: AudioBuffer,
         sample_rate: int,
     ) -> None:
+        print(f"Dispatching audio chunk: {len(audio)} samples @ {sample_rate} Hz")
         for listener in tuple(self._listeners):
             listener.on_audio_chunk(
                 audio,
