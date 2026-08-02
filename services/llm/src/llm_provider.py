@@ -6,6 +6,7 @@ from typing import Any, Sequence
 import httpx
 
 from models import Message
+from constants import OLLAMA_BASE_URL, OLLAMA_MODEL
 
 
 class LLMCallbacks(ABC):
@@ -28,8 +29,8 @@ class LLMCallbacks(ABC):
 class LLMProviderConfig:
     """Configuration for the local Ollama provider."""
 
-    base_url: str = "http://172.19.96.1:11434"
-    model: str = "qwen3.5:4b"
+    base_url: str = OLLAMA_BASE_URL
+    model: str = OLLAMA_MODEL
 
 
 class LLMProviderError(Exception):

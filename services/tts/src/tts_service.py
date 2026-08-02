@@ -8,9 +8,11 @@ from dataclasses import dataclass
 from typing import Optional, TypeAlias
 
 from kokoro_onnx import Kokoro
+import asyncio
 import numpy as np
 import numpy.typing as npt
-import asyncio
+
+from constants import TTS_DEFAULT_VOICE, TTS_DEFAULT_LANGUAGE
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +51,9 @@ class TTSConfig:
     model_path: str
     voices_path: str
 
-    voice: str = "af_sarah"
+    voice: str = TTS_DEFAULT_VOICE
     speed: float = 1.0
-    language: str = "en-us"
+    language: str = TTS_DEFAULT_LANGUAGE
 
     queue_size: int = 1
 

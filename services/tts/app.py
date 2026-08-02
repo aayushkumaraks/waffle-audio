@@ -5,10 +5,7 @@ from pathlib import Path
 from services.tts.src.tts_service import TTSConfig, TTSService
 
 from services.audio.src.audio_player import AudioPlayer
-
-
-MODEL_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/latest/download/kokoro-v1.0.onnx"
-VOICES_URL = "https://github.com/thewh1teagle/kokoro-onnx/releases/latest/download/voices-v1.0.bin"
+from constants import KOKORO_MODEL_DOWNLOAD_URL as MODEL_URL, KOKORO_VOICES_DOWNLOAD_URL as VOICES_URL
 
 
 def download(url: str, destination: Path) -> None:

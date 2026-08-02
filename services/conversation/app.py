@@ -9,6 +9,7 @@ from services.conversation.src import ConversationManager
 from services.llm.src import LLMProvider, LLMProviderConfig, LLMService
 from services.stt.src import AudioQueueFull, STTService
 from services.tts.src import TTSConfig, TTSService
+from constants import OLLAMA_BASE_URL, OLLAMA_MODEL, TTS_MODEL_PATH, TTS_VOICES_PATH
 
 
 logging.basicConfig(
@@ -17,9 +18,6 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
-
-MODEL_PATH = "voiceModels/kokoro-v1.0.onnx"
-VOICES_PATH = "voiceModels/voices-v1.0.bin"
 
 
 stt = STTService()
@@ -32,8 +30,8 @@ llm = LLMService(provider)
 
 tts = TTSService(
     TTSConfig(
-        model_path=MODEL_PATH,
-        voices_path=VOICES_PATH,
+        model_path=TTS_MODEL_PATH,
+        voices_path=TTS_VOICES_PATH,
     )
 )
 
