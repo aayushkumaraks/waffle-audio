@@ -1,22 +1,66 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import queue
+import re
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional, TypeAlias
 
-from kokoro_onnx import Kokoro
-import asyncio
 import numpy as np
 import numpy.typing as npt
+from kokoro_onnx import Kokoro
 
 from constants import TTS_DEFAULT_VOICE, TTS_DEFAULT_LANGUAGE
 
 logger = logging.getLogger(__name__)
 
 _STOP = object()
+
+# Kokoro's ONNX model hard-caps input at 510 phonemes.  A conservative
+# character ceiling well below that limit; real counts vary by language
+# and vocabulary, but ~200 chars is safe for English prose.
+_MAX_CHUNK_CHARS = 200
+
+
+def _split_text(text: str) -> list[str]:
+    """
+    Split text into chunks that each fit within Kokoro's phoneme limit.
+
+    Strategy:
+    1. Split on sentence-ending punctuation (. ! ?).
+    2. Any chunk still above _MAX_CHUNK_CHARS is further split on
+       clause boundaries (, ; :) or, as a last resort, on whitespace.
+    """
+    # Split on sentence boundaries, keeping the delimiter with its sentence.
+    raw = re.split(r'(?<=[.!?])\s+', text.strip())
+
+    chunks: list[str] = []
+    for sentence in raw:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        if len(sentence) <= _MAX_CHUNK_CHARS:
+            chunks.append(sentence)
+        else:
+            # Further split on clause punctuation.
+            clauses = re.split(r'(?<=[,;:])\s+', sentence)
+            current = ""
+            for clause in clauses:
+                clause = clause.strip()
+                if not clause:
+                    continue
+                if current and len(current) + 1 + len(clause) > _MAX_CHUNK_CHARS:
+                    chunks.append(current)
+                    current = clause
+                else:
+                    current = (current + " " + clause).strip() if current else clause
+            if current:
+                chunks.append(current)
+
+    return chunks or [text]
 
 AudioBuffer: TypeAlias = npt.NDArray[np.float32]
 QueueItem: TypeAlias = str | object
@@ -231,7 +275,9 @@ class TTSService:
             text = item
 
             try:
-                asyncio.run(self._synthesize(text))
+                chunks = _split_text(text)
+                for chunk in chunks:
+                    asyncio.run(self._synthesize(chunk))
 
             except Exception:
                 logger.exception("Speech synthesis failed.")
