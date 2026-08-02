@@ -114,15 +114,26 @@ class LLMProvider:
                 "Failed to generate response."
             ) from exc
 
+    _SYSTEM_PROMPT = (
+        "You are a helpful voice assistant. "
+        "Your responses are spoken aloud by a text-to-speech engine, so follow these rules strictly:\n"
+        "1. Reply in 1-2 short sentences only.\n"
+        "2. Use plain English words only — no emojis, no symbols, no markdown, no bullet points, no asterisks, no hashtags.\n"
+        "3. Write out numbers and units in full (e.g. 'three kilometres' not '3km').\n"
+        "4. Do not include any special characters that are not standard punctuation (period, comma, question mark, exclamation mark)."
+    )
+
     def _build_request(
         self,
         messages: Sequence[Message],
     ) -> dict[str, Any]:
         """Build an Ollama chat request."""
 
+        system_message = {"role": "system", "content": self._SYSTEM_PROMPT}
+
         return {
             "model": self._config.model,
-            "messages": [
+            "messages": [system_message] + [
                 {
                     "role": message.role,
                     "content": message.content,
