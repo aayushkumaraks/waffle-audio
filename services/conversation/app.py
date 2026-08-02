@@ -59,6 +59,9 @@ def audio_callback(indata, frames, time_info, status):
     if status:
         logger.warning(status)
 
+    if player.is_playing:
+        return
+
     audio = indata.astype(np.float32).flatten()
 
     try:

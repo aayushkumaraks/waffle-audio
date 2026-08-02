@@ -28,6 +28,12 @@ class AudioPlayer(TTSListener):
         self._worker_thread: threading.Thread | None = None
 
         self._shutdown = threading.Event()
+        self._playing = threading.Event()
+
+    @property
+    def is_playing(self) -> bool:
+        """True while audio is actively being played back."""
+        return self._playing.is_set()
 
     def start(self) -> None:
         self._shutdown.clear()
@@ -88,12 +94,16 @@ class AudioPlayer(TTSListener):
                     audio.dtype,
                 )
 
-                with sd.OutputStream(
-                    samplerate=sample_rate,
-                    channels=2,
-                    dtype="float32",
-                ) as stream:
-                    stream.write(stereo_audio)
+                self._playing.set()
+                try:
+                    with sd.OutputStream(
+                        samplerate=sample_rate,
+                        channels=2,
+                        dtype="float32",
+                    ) as stream:
+                        stream.write(stereo_audio)
+                finally:
+                    self._playing.clear()
 
                 logger.info("Returned from blocking play")
 
