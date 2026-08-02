@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import logging
+import queue
+
 from models import Message
 
 from services.stt.src import STTListener, STTService
 from services.llm.src import LLMListener, LLMService
 from services.tts.src import TTSService
+from .sentence_gate import SentenceGate
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +46,8 @@ class ConversationManager(LLMListener):
 
         self._history: list[Message] = []
 
+        self._gate = SentenceGate(callback=self._trigger_llm)
+
         self._started = False
 
     def start(self) -> None:
@@ -64,6 +69,7 @@ class ConversationManager(LLMListener):
         if not self._started:
             return
 
+        self._gate.cancel()
         self._stt.remove_listener(self._stt_listener)
         self._llm.remove_listener(self)
 
@@ -103,6 +109,10 @@ class ConversationManager(LLMListener):
             logger.debug("Ignoring empty transcript.")
             return
 
+        self._gate.submit(text)
+
+    def _trigger_llm(self, text: str) -> None:
+        """Called by SentenceGate once the utterance looks complete."""
         self._history.append(
             Message(
                 role="user",
@@ -115,7 +125,12 @@ class ConversationManager(LLMListener):
             len(self._history),
         )
 
-        self._llm.generate(self._history)
+        try:
+            self._llm.generate(self._history)
+        except queue.Full:
+            logger.warning(
+                "LLM queue is full — dropping utterance: %s", text
+            )
 
     # ------------------------------------------------------------------
     # LLM Event Handlers
