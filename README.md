@@ -1,4 +1,4 @@
-# WaffleAudio
+# Waffle-Audio
 
 A real-time, voice-to-voice AI assistant that runs entirely on your local machine.
 
