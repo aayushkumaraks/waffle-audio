@@ -2,7 +2,7 @@
 name = "waffle-voice"
 version = "0.1.0"
 description = "Voice-to-voice AI assistant"
-requires-python = ">=3.11"
+requires-python = "==3.11"
 
 dependencies = [
     "httpx>=0.28.1",
