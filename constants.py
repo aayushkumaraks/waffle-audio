@@ -5,6 +5,19 @@
 # live here so they can be changed in one place.
 # ---------------------------------------------------------------------------
 
+import os
+
+
+def _int_from_env(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"Environment variable {name} must be an integer.") from exc
+
 # ---------------------------------------------------------------------------
 # Ollama / LLM
 # ---------------------------------------------------------------------------
@@ -38,3 +51,11 @@ KOKORO_VOICES_DOWNLOAD_URL: str = (
 
 TTS_DEFAULT_VOICE: str = "af_sarah"
 TTS_DEFAULT_LANGUAGE: str = "en-us"
+
+# ---------------------------------------------------------------------------
+# HTTP API
+# ---------------------------------------------------------------------------
+
+API_HOST: str = os.getenv("VOICECHAT_API_HOST", "0.0.0.0")
+API_PORT: int = _int_from_env("VOICECHAT_API_PORT", 3000)
+API_CORS_ALLOW_ORIGINS: str = os.getenv("VOICECHAT_CORS_ALLOW_ORIGINS", "*")

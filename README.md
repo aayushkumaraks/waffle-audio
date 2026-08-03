@@ -48,3 +48,23 @@ pyproject.toml    Dependencies managed by uv
 
 See [SETUP.md](SETUP.md) for first-time installation and [RUN.md](RUN.md) to start the
 app.
+
+## HTTP API
+
+All services are exposed on one HTTP server process.
+
+- Default port: `3000`
+- Configurable via environment variable: `VOICECHAT_API_PORT`
+- Host configurable via: `VOICECHAT_API_HOST`
+
+Start the API server:
+
+```bash
+uv run python -m services.api.app
+```
+
+Then open:
+
+```text
+http://localhost:3000/docs
+```

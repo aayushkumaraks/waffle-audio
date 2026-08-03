@@ -13,48 +13,76 @@ login), you can skip this step.
 
 ---
 
-## Start the app
+## Start the API server
 
 From the project root:
 
 ```
-uv run python -m services.conversation.app
+uv run python -m services.api.app
 ```
 
 You should see output similar to:
 
 ```
-2026-08-02 09:00:00,000 INFO services.tts.src.tts_service: TTSService started.
-2026-08-02 09:00:00,010 INFO services.conversation.src.manager: ConversationManager started.
-2026-08-02 09:00:00,020 INFO services.stt.src.stt_service: Loading Moonshine model...
-2026-08-02 09:00:02,000 INFO services.stt.src.stt_service: STTService started.
-2026-08-02 09:00:02,010 INFO __main__: Listening... Press Ctrl+C to stop.
+INFO:     Started server process [12345]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:3000 (Press CTRL+C to quit)
 ```
 
-Once you see "Listening...", speak into your microphone. The assistant will reply
-through your speakers.
+Swagger docs are available at:
+
+```
+http://localhost:3000/docs
+```
+
+All services are exposed on this same server and same port.
 
 ---
 
 ## Stop the app
 
-Press `Ctrl+C`. The app will stop cleanly and print the full conversation history:
+Press `Ctrl+C`. The server shuts down and all services are stopped cleanly.
 
-```
-Conversation History
---------------------
-1. [user] Hello, how are you?
-2. [assistant] I am doing well, thank you for asking.
-```
+---
+
+## Main endpoints
+
+| Area         | Method + Path               | Purpose |
+|--------------|-----------------------------|---------|
+| Health       | `GET /health`               | Service health and API port |
+| LLM          | `POST /llm/generate`        | Generate one response from chat messages |
+| TTS          | `POST /tts/speak`           | Queue text for speech |
+| STT          | `POST /stt/push`            | Push audio samples for transcription |
+| STT          | `GET /stt/transcripts`      | Read captured transcript events |
+| STT          | `DELETE /stt/transcripts`   | Clear transcript events |
+| Conversation | `POST /conversation/respond`| Submit finalized user text into conversation flow |
+| Conversation | `GET /conversation/history` | Read conversation history |
+| Conversation | `DELETE /conversation/history` | Clear conversation history |
+| Audio        | `GET /audio/status`         | Playback state |
 
 ---
 
 ## Configuration
 
-All configuration is in source; there is no separate config file.
+Use environment variables to configure the API bind address and port.
+
+```bash
+VOICECHAT_API_HOST=0.0.0.0 VOICECHAT_API_PORT=3000 uv run python -m services.api.app
+```
+
+For browser clients, CORS is enabled by default for all origins (`*`).
+To restrict origins, pass a comma-separated allowlist:
+
+```bash
+VOICECHAT_CORS_ALLOW_ORIGINS=http://localhost:8080,http://127.0.0.1:5500 uv run python -m services.api.app
+```
 
 | Setting        | Location                                     | Default              |
 |----------------|----------------------------------------------|----------------------|
+| API host       | `constants.py` (`VOICECHAT_API_HOST`)        | 0.0.0.0              |
+| API port       | `constants.py` (`VOICECHAT_API_PORT`)        | 3000                 |
+| CORS origins   | `constants.py` (`VOICECHAT_CORS_ALLOW_ORIGINS`) | *                 |
 | Ollama URL     | `services/llm/src/llm_provider.py`           | http://172.19.96.1:11434 |
 | Ollama model   | `services/llm/src/llm_provider.py`           | qwen3.5:4b           |
 | TTS voice      | `services/tts/src/tts_service.py`            | af_sarah             |
@@ -69,6 +97,10 @@ All configuration is in source; there is no separate config file.
 **"Unable to connect to Ollama"**
 Ollama is not running or is on a different address. Start it with `ollama serve` and
 check `LLMProviderConfig.base_url` in `services/llm/src/llm_provider.py`.
+
+**"Address already in use"**
+Another process is already using the configured API port. Change `VOICECHAT_API_PORT`
+to an open port.
 
 **No audio input / output**
 Run `uv run python -c "import sounddevice; print(sounddevice.query_devices())"` to list

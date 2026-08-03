@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import threading
 
 from models import Message
 
@@ -49,6 +50,8 @@ class ConversationManager(LLMListener):
         self._gate = SentenceGate(callback=self._trigger_llm)
 
         self._started = False
+        self._pending_generation = False
+        self._state_lock = threading.Lock()
 
     def start(self) -> None:
         """Start listening for conversation events."""
@@ -90,6 +93,16 @@ class ConversationManager(LLMListener):
 
         return self._history.copy()
 
+    def submit_user_text(self, text: str) -> None:
+        """Submit a finalized user utterance to the conversation pipeline."""
+
+        text = text.strip()
+        if not text:
+            logger.debug("Ignoring empty user text.")
+            return
+
+        self._trigger_llm(text)
+
     # ------------------------------------------------------------------
     # STT Event Handlers
     # ------------------------------------------------------------------
@@ -127,6 +140,8 @@ class ConversationManager(LLMListener):
 
         try:
             self._llm.generate(self._history)
+            with self._state_lock:
+                self._pending_generation = True
         except queue.Full:
             logger.warning(
                 "LLM queue is full — dropping utterance: %s", text
@@ -143,6 +158,14 @@ class ConversationManager(LLMListener):
         logger.debug("LLM generation updated.")
 
     def on_generation_completed(self, text: str) -> None:
+        with self._state_lock:
+            if not self._pending_generation:
+                logger.debug(
+                    "Ignoring LLM completion not initiated by ConversationManager."
+                )
+                return
+            self._pending_generation = False
+
         logger.info("LLM generation completed.")
 
         self._tts.speak(text)
