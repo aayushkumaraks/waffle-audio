@@ -1,7 +1,8 @@
 /* VoiceChat browser client
  *
- * Flow: mic recording → /stt/push (PCM chunks) → poll /stt/transcripts
- *       → /llm/generate (with history) → /tts/synthesize (WAV) → <Audio>
+ * Two modes:
+ *   LIVE  – WebRTC tunnel: mic → server STT → LLM → Kokoro TTS → browser speakers
+ *   HTTP  – Push-to-talk: record → /stt/push → /llm/generate → /tts/synthesize
  */
 
 // ─── Config ──────────────────────────────────────────────────────────────────
@@ -37,16 +38,19 @@ const talkBtn     = document.getElementById("talkBtn");
 const textInput   = document.getElementById("textInput");
 const sendBtn     = document.getElementById("sendBtn");
 const clearBtn    = document.getElementById("clearBtn");
+const connectBtn  = document.getElementById("connectBtn");
+const remoteAudio = document.getElementById("remoteAudio");
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const baseUrl = () => urlInput.value.replace(/\/$/, "");
 const sleep   = ms => new Promise(r => setTimeout(r, ms));
 
-function setStatus(label, state /* idle|recording|busy */) {
+function setStatus(label, state /* idle|recording|busy|live */) {
   statusLabel.textContent = label;
+  const isLive = state === "live";
   const isBusy = state === "busy" || state === "recording";
-  talkBtn.disabled = isBusy && state !== "recording";
+  talkBtn.disabled = isLive || (isBusy && state !== "recording");
   sendBtn.disabled = isBusy;
   textInput.disabled = isBusy;
   if (state === "recording") {
@@ -314,6 +318,158 @@ async function stopAndProcess() {
   }
 }
 
+// ─── WebRTC ──────────────────────────────────────────────────────────────────
+
+let rtcPeer          = null;
+let _pollTimer       = null;
+let _knownHistoryLen = 0;
+let _liveTranscriptEl = null;
+
+async function connectRTC() {
+  connectBtn.disabled = true;
+  connectBtn.textContent = "Connecting…";
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  } catch (err) {
+    showError("Microphone access denied: " + err.message);
+    connectBtn.disabled = false;
+    connectBtn.textContent = "📞 Live";
+    return;
+  }
+
+  const pc = new RTCPeerConnection({
+    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+  });
+  rtcPeer = pc;
+
+  // Send mic audio to server
+  for (const track of stream.getAudioTracks()) pc.addTrack(track, stream);
+
+  // Play TTS audio from server
+  pc.ontrack = e => {
+    if (e.streams[0]) remoteAudio.srcObject = e.streams[0];
+  };
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+
+  // Wait for ICE gathering (max 3 s)
+  await new Promise(resolve => {
+    const t = setTimeout(resolve, 3000);
+    if (pc.iceGatheringState === "complete") { clearTimeout(t); resolve(); return; }
+    pc.onicegatheringstatechange = () => {
+      if (pc.iceGatheringState === "complete") { clearTimeout(t); resolve(); }
+    };
+  });
+
+  let answer;
+  try {
+    const res = await fetch(baseUrl() + "/webrtc/offer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sdp: pc.localDescription.sdp, type: pc.localDescription.type }),
+    });
+    if (!res.ok) throw new Error(await res.json().then(d => d.detail).catch(() => res.statusText));
+    answer = await res.json();
+  } catch (err) {
+    showError("WebRTC handshake failed: " + err.message);
+    await disconnectRTC();
+    return;
+  }
+
+  await pc.setRemoteDescription(answer);
+
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === "connected") {
+      connectBtn.disabled = false;
+      connectBtn.textContent = "⏹ Disconnect";
+      connectBtn.classList.add("live");
+      setStatus("Live – just speak", "live");
+      _knownHistoryLen = 0;
+      _pollTimer = setInterval(_pollLiveState, 600);
+    } else if (["failed", "disconnected", "closed"].includes(pc.connectionState)) {
+      _endLiveMode();
+    }
+  };
+}
+
+async function disconnectRTC() {
+  clearInterval(_pollTimer);
+  _pollTimer = null;
+  _removeLiveTranscript();
+
+  if (rtcPeer) {
+    rtcPeer.onconnectionstatechange = null;
+    rtcPeer.close();
+    rtcPeer = null;
+  }
+
+  remoteAudio.srcObject = null;
+  _endLiveMode();
+}
+
+function _endLiveMode() {
+  clearInterval(_pollTimer);
+  _pollTimer = null;
+  _removeLiveTranscript();
+  rtcPeer = null;
+  connectBtn.disabled = false;
+  connectBtn.textContent = "📞 Live";
+  connectBtn.classList.remove("live");
+  setStatus("Idle", "idle");
+}
+
+function _removeLiveTranscript() {
+  if (_liveTranscriptEl) {
+    _liveTranscriptEl.remove();
+    _liveTranscriptEl = null;
+  }
+}
+
+async function _pollLiveState() {
+  try {
+    // Show live (in-progress) transcript as a dimmed bubble
+    const tRes = await fetch(baseUrl() + "/stt/transcripts");
+    if (tRes.ok) {
+      const events = await tRes.json();
+      const live = [...events].reverse().find(e => e.kind !== "completed");
+      if (live && live.text.trim()) {
+        if (!_liveTranscriptEl) {
+          _liveTranscriptEl = document.createElement("div");
+          _liveTranscriptEl.className = "msg user live-transcript";
+          _liveTranscriptEl.innerHTML = `<div class="role">You</div><div class="content"></div>`;
+          messagesEl.appendChild(_liveTranscriptEl);
+        }
+        _liveTranscriptEl.querySelector(".content").textContent = live.text;
+        _liveTranscriptEl.scrollIntoView({ behavior: "smooth", block: "end" });
+      } else {
+        _removeLiveTranscript();
+      }
+    }
+
+    // Sync completed conversation turns
+    const hRes = await fetch(baseUrl() + "/conversation/history");
+    if (!hRes.ok) return;
+    const turns = await hRes.json();
+    if (turns.length > _knownHistoryLen) {
+      for (let i = _knownHistoryLen; i < turns.length; i++) {
+        _removeLiveTranscript(); // replace live transcript with real bubble
+        addMessage(turns[i].role, turns[i].content);
+      }
+      _knownHistoryLen = turns.length;
+    }
+  } catch {
+    // Network hiccup – ignore
+  }
+}
+
+connectBtn.addEventListener("click", () => {
+  if (rtcPeer) disconnectRTC();
+  else connectRTC();
+});
+
 // ─── Button handlers ─────────────────────────────────────────────────────────
 
 talkBtn.addEventListener("pointerdown", async e => {
@@ -367,6 +523,12 @@ textInput.addEventListener("input", () => {
 clearBtn.addEventListener("click", () => {
   history = [];
   messagesEl.innerHTML = "";
+  // Also clear server history when in live mode
+  if (rtcPeer) {
+    fetch(baseUrl() + "/conversation/history", { method: "DELETE" }).catch(() => {});
+    fetch(baseUrl() + "/stt/transcripts", { method: "DELETE" }).catch(() => {});
+    _knownHistoryLen = 0;
+  }
 });
 
 urlInput.addEventListener("change", () => checkHealth());

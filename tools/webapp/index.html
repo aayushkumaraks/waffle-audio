@@ -86,6 +86,22 @@
     }
     #clearBtn:hover { border-color: var(--accent); color: var(--text); }
 
+    #connectBtn {
+      background: transparent;
+      border: 1px solid var(--green);
+      color: var(--green);
+      padding: 5px 11px;
+      border-radius: 8px;
+      font-size: 0.78rem;
+      cursor: pointer;
+      font-weight: 600;
+      transition: background 0.2s, color 0.2s;
+    }
+    #connectBtn:hover    { background: rgba(80,216,144,0.12); }
+    #connectBtn.live     { border-color: var(--red); color: var(--red); }
+    #connectBtn.live:hover { background: rgba(255,95,95,0.12); }
+    #connectBtn:disabled { opacity: 0.4; cursor: default; }
+
     /* ── Messages ── */
     #messages {
       flex: 1;
@@ -98,7 +114,7 @@
     }
 
     #messages:empty::after {
-      content: "Hold the button below to start talking.";
+      content: "Click 📞 Live for real-time voice, or hold 🎤 for push-to-talk.";
       color: var(--text-muted);
       font-size: 0.9rem;
       text-align: center;
@@ -148,6 +164,14 @@
       animation: blink 0.9s step-end infinite;
     }
     @keyframes blink { 50% { opacity: 0; } }
+
+    .msg.live-transcript {
+      background: transparent;
+      border: 1px dashed var(--border);
+      opacity: 0.6;
+      font-style: italic;
+      align-self: flex-end;
+    }
 
     /* ── Footer ── */
     footer {
@@ -239,10 +263,14 @@
     <h1>VoiceChat</h1>
     <div id="statusDot" title="API connection"></div>
     <input id="urlInput" type="text" placeholder="API base URL" spellcheck="false">
+    <button id="connectBtn">📞 Live</button>
     <button id="clearBtn">Clear</button>
   </header>
 
   <div id="messages" role="log" aria-live="polite"></div>
+
+  <!-- receives the server's TTS audio track -->
+  <audio id="remoteAudio" autoplay playsinline style="display:none"></audio>
 
   <footer>
     <div id="textRow">

@@ -30,6 +30,8 @@ from models import Message
 from services.audio.src import AudioPlayer
 from services.conversation.src import ConversationManager
 from services.llm.src import LLMListener, LLMProvider, LLMProviderConfig, LLMService
+from services.api.webrtc_handler import close_all as _webrtc_close_all
+from services.api.webrtc_handler import create_answer as _webrtc_create_answer
 from services.stt.src import AudioQueueFull, STTConfig, STTListener, STTService
 from services.tts.src import SpeechQueueFull, TTSConfig, TTSService
 
@@ -221,6 +223,7 @@ async def lifespan(_: FastAPI):
     try:
         yield
     finally:
+        await _webrtc_close_all()
         runtime.stop()
 
 
@@ -338,6 +341,17 @@ def conversation_history() -> list[ChatMessage]:
 def clear_conversation_history() -> dict[str, str]:
     runtime.conversation.reset()
     return {"status": "cleared"}
+
+
+class WebRTCOfferRequest(BaseModel):
+    sdp: str
+    type: str
+
+
+@app.post("/webrtc/offer")
+async def webrtc_offer(offer: WebRTCOfferRequest) -> dict[str, str]:
+    """Exchange SDP: accept a browser offer and return the server answer."""
+    return await _webrtc_create_answer(offer.sdp, offer.type, runtime.tts, runtime.stt)
 
 
 @app.get("/audio/status")

@@ -6,6 +6,7 @@ requires-python = ">=3.11,<3.12"
 
 dependencies = [
     "aiofiles>=23.0",
+    "aiortc>=1.9.0",
     "fastapi>=0.115.0",
     "httpx>=0.28.1",
     "kokoro-onnx>=0.5.0",
