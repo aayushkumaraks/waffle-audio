@@ -136,6 +136,7 @@ class TTSService:
         self._worker_thread: Optional[threading.Thread] = None
 
         self._shutdown = threading.Event()
+        self._engine_lock = threading.Lock()
 
         self._engine: Optional[Kokoro] = None
 
@@ -277,10 +278,41 @@ class TTSService:
             try:
                 chunks = _split_text(text)
                 for chunk in chunks:
-                    asyncio.run(self._synthesize(chunk))
+                    with self._engine_lock:
+                        asyncio.run(self._synthesize(chunk))
 
             except Exception:
                 logger.exception("Speech synthesis failed.")
+
+    def synthesize_direct(self, text: str) -> tuple[AudioBuffer, int]:
+        """Synthesize text and return concatenated audio without using the listener pipeline."""
+        if self._engine is None:
+            raise ServiceNotStarted("TTSService is not started.")
+
+        chunks: list[AudioBuffer] = []
+        sample_rate = 24000
+
+        async def _collect() -> None:
+            nonlocal sample_rate
+            engine = self._engine
+            assert engine is not None
+            for chunk_text in _split_text(text):
+                async for audio, sr in engine.create_stream(
+                    text=chunk_text,
+                    voice=self._config.voice,
+                    speed=self._config.speed,
+                    lang=self._config.language,
+                ):
+                    chunks.append(audio)
+                    sample_rate = sr
+
+        with self._engine_lock:
+            asyncio.run(_collect())
+
+        if not chunks:
+            return np.zeros(0, dtype=np.float32), sample_rate
+
+        return np.concatenate(chunks).astype(np.float32), sample_rate
 
     def _dispatch_synthesis_started(self) -> None:
         for listener in tuple(self._listeners):

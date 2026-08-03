@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VoiceChat</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #232736;
+      --border: #2e3347;
+      --accent: #6c63ff;
+      --accent-glow: rgba(108, 99, 255, 0.35);
+      --user-bubble: #2d2b4e;
+      --assistant-bubble: #1e2535;
+      --text: #e2e4ed;
+      --text-muted: #8890a4;
+      --red: #ff5f5f;
+      --green: #50d890;
+      --yellow: #ffd166;
+      --radius: 12px;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    header h1 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      flex: 1;
+    }
+
+    #statusDot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--text-muted);
+      flex-shrink: 0;
+      transition: background 0.3s;
+    }
+    #statusDot.ok   { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    #statusDot.err  { background: var(--red);   box-shadow: 0 0 6px var(--red); }
+
+    #urlInput {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 5px 10px;
+      border-radius: 8px;
+      font-size: 0.78rem;
+      width: 190px;
+      outline: none;
+    }
+    #urlInput:focus { border-color: var(--accent); }
+
+    #clearBtn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 5px 10px;
+      border-radius: 8px;
+      font-size: 0.78rem;
+      cursor: pointer;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    #clearBtn:hover { border-color: var(--accent); color: var(--text); }
+
+    /* ── Messages ── */
+    #messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      scroll-behavior: smooth;
+    }
+
+    #messages:empty::after {
+      content: "Hold the button below to start talking.";
+      color: var(--text-muted);
+      font-size: 0.9rem;
+      text-align: center;
+      margin: auto;
+    }
+
+    .msg {
+      max-width: 72%;
+      padding: 12px 16px;
+      border-radius: var(--radius);
+      line-height: 1.55;
+      font-size: 0.92rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      animation: fadeUp 0.2s ease;
+    }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .msg.user {
+      background: var(--user-bubble);
+      align-self: flex-end;
+      border-bottom-right-radius: 4px;
+    }
+
+    .msg.assistant {
+      background: var(--assistant-bubble);
+      align-self: flex-start;
+      border-bottom-left-radius: 4px;
+      border: 1px solid var(--border);
+    }
+
+    .msg .role {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      font-weight: 600;
+      margin-bottom: 5px;
+      opacity: 0.55;
+    }
+
+    .msg.typing .content::after {
+      content: "▋";
+      animation: blink 0.9s step-end infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    /* ── Footer ── */
+    footer {
+      flex-shrink: 0;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 18px 20px 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+
+    /* text input row */
+    #textRow {
+      display: flex;
+      gap: 8px;
+      width: 100%;
+      max-width: 640px;
+    }
+
+    #textInput {
+      flex: 1;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 9px 14px;
+      border-radius: 10px;
+      font-size: 0.9rem;
+      outline: none;
+      resize: none;
+    }
+    #textInput:focus { border-color: var(--accent); }
+    #textInput::placeholder { color: var(--text-muted); }
+
+    #sendBtn {
+      background: var(--accent);
+      border: none;
+      color: #fff;
+      padding: 9px 18px;
+      border-radius: 10px;
+      font-size: 0.9rem;
+      cursor: pointer;
+      font-weight: 600;
+      transition: opacity 0.2s;
+    }
+    #sendBtn:disabled { opacity: 0.4; cursor: default; }
+    #sendBtn:not(:disabled):hover { opacity: 0.85; }
+
+    /* talk button */
+    #talkBtn {
+      width: 72px; height: 72px;
+      border-radius: 50%;
+      border: 3px solid var(--accent);
+      background: transparent;
+      color: var(--accent);
+      font-size: 1.7rem;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s, box-shadow 0.15s, transform 0.1s;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: none;
+    }
+    #talkBtn:not(:disabled):hover { background: var(--accent-glow); }
+    #talkBtn.recording {
+      background: var(--red);
+      border-color: var(--red);
+      color: #fff;
+      box-shadow: 0 0 0 8px rgba(255,95,95,0.2), 0 0 0 16px rgba(255,95,95,0.08);
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 8px rgba(255,95,95,0.2), 0 0 0 16px rgba(255,95,95,0.08); }
+      50%       { box-shadow: 0 0 0 12px rgba(255,95,95,0.25), 0 0 0 22px rgba(255,95,95,0.05); }
+    }
+    #talkBtn:disabled { opacity: 0.4; cursor: default; }
+
+    #statusLabel {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      min-height: 1.2em;
+      letter-spacing: 0.03em;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>VoiceChat</h1>
+    <div id="statusDot" title="API connection"></div>
+    <input id="urlInput" type="text" placeholder="API base URL" spellcheck="false">
+    <button id="clearBtn">Clear</button>
+  </header>
+
+  <div id="messages" role="log" aria-live="polite"></div>
+
+  <footer>
+    <div id="textRow">
+      <textarea id="textInput" rows="1" placeholder="Or type a message…"></textarea>
+      <button id="sendBtn">Send</button>
+    </div>
+    <button id="talkBtn" title="Hold to talk">🎤</button>
+    <div id="statusLabel">Idle</div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

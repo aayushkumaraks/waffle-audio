@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+import asyncio
+import io
 import logging
 import queue
 import threading
+import wave
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from constants import (
@@ -34,6 +40,16 @@ def _parse_cors_origins(value: str) -> list[str]:
     origins = [item.strip() for item in value.split(",") if item.strip()]
     return origins or ["*"]
 
+
+def _audio_to_wav_bytes(audio: np.ndarray, sample_rate: int) -> bytes:
+    pcm = (np.clip(audio, -1.0, 1.0) * 32767).astype(np.int16)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm.tobytes())
+    return buf.getvalue()
 
 class ChatMessage(BaseModel):
     role: Literal["user", "assistant"]
@@ -267,6 +283,23 @@ def speak_tts(request: TTSRequest) -> dict[str, str]:
     return {"status": "queued"}
 
 
+@app.post("/tts/synthesize")
+async def synthesize_tts(request: TTSRequest) -> Response:
+    """Synthesize text and return a WAV audio file for browser playback."""
+    loop = asyncio.get_event_loop()
+
+    def _synth() -> bytes:
+        from services.tts.src.tts_service import ServiceNotStarted
+        try:
+            audio, sample_rate = runtime.tts.synthesize_direct(request.text)
+        except ServiceNotStarted as exc:
+            raise HTTPException(status_code=503, detail="TTS engine not ready.") from exc
+        return _audio_to_wav_bytes(audio, sample_rate)
+
+    wav_bytes = await loop.run_in_executor(None, _synth)
+    return Response(content=wav_bytes, media_type="audio/wav")
+
+
 @app.post("/stt/push")
 def push_stt_audio(request: STTPushRequest) -> dict[str, str]:
     audio = np.asarray(request.samples, dtype=np.float32)
@@ -310,6 +343,11 @@ def clear_conversation_history() -> dict[str, str]:
 @app.get("/audio/status")
 def audio_status() -> dict[str, bool]:
     return {"is_playing": runtime.player.is_playing}
+
+
+_WEBAPP_DIR = Path(__file__).resolve().parent.parent.parent / "tools" / "webapp"
+if _WEBAPP_DIR.is_dir():
+    app.mount("/ui", StaticFiles(directory=_WEBAPP_DIR, html=True), name="webapp")
 
 
 def main() -> None:

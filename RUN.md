@@ -36,7 +36,13 @@ Swagger docs are available at:
 http://localhost:3000/docs
 ```
 
-All services are exposed on this same server and same port.
+The **browser webapp** is served from the same port — no separate server needed:
+
+```
+http://localhost:3000/ui
+```
+
+All services and the webapp are on this same server and port.
 
 ---
 
@@ -50,9 +56,11 @@ Press `Ctrl+C`. The server shuts down and all services are stopped cleanly.
 
 | Area         | Method + Path               | Purpose |
 |--------------|-----------------------------|---------|
+| **Webapp**   | `GET /ui`                   | Browser voice chat UI |
 | Health       | `GET /health`               | Service health and API port |
 | LLM          | `POST /llm/generate`        | Generate one response from chat messages |
-| TTS          | `POST /tts/speak`           | Queue text for speech |
+| TTS          | `POST /tts/speak`           | Queue text for speech (server-side playback) |
+| TTS          | `POST /tts/synthesize`      | Synthesize text and return WAV for browser playback |
 | STT          | `POST /stt/push`            | Push audio samples for transcription |
 | STT          | `GET /stt/transcripts`      | Read captured transcript events |
 | STT          | `DELETE /stt/transcripts`   | Clear transcript events |
