@@ -2,3 +2,4 @@
 __pycache__/
 voiceModels/
 tools/api-tester
+node_modules/
