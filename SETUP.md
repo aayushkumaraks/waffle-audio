@@ -115,7 +115,9 @@ If your Ollama server is running elsewhere, update
 
 ---
 
-## 4. Place voice model files
+## 4. Choose a TTS backend
+
+Kokoro remains the default and uses the existing model files in `voiceModels/`:
 
 ```
 voiceModels/
@@ -123,9 +125,11 @@ voiceModels/
 └── voices-v1.0.bin
 ```
 
-Download them from:
-
-https://github.com/thewh1teagle/kokoro-onnx/releases
+To opt into Pocket TTS, set `VOICECHAT_TTS_BACKEND=pocket` before starting the
+app. It downloads and caches its model and the default `alba` voice on first use;
+no files need to be placed in `voiceModels/`. Its cache is persisted at
+`voiceModels/pocket-tts-cache/`; override that location with
+`VOICECHAT_POCKET_TTS_CACHE_DIR` if needed.
 
 ---
 

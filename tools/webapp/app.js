@@ -1,7 +1,7 @@
 /* VoiceChat browser client
  *
  * Two modes:
- *   LIVE  – WebRTC tunnel: mic → server STT → LLM → Kokoro TTS → browser speakers
+ *   LIVE  – WebRTC tunnel: mic → server STT → LLM → selected TTS backend → browser speakers
  *   HTTP  – Push-to-talk: record → /stt/push → /llm/generate → /tts/synthesize
  */
 

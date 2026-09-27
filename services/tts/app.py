@@ -1,52 +1,65 @@
-import tempfile
-import time
-from pathlib import Path
+"""Manual smoke test for either feature-flagged TTS backend.
 
-from services.tts.src.tts_service import TTSConfig, TTSService
+Examples:
+    uv run python -m services.tts.app
+    VOICECHAT_TTS_BACKEND=pocket uv run python -m services.tts.app
+    uv run python -m services.tts.app --backend kokoro
+"""
+
+from __future__ import annotations
+
+import argparse
+import threading
 
 from services.audio.src.audio_player import AudioPlayer
-from constants import KOKORO_MODEL_DOWNLOAD_URL as MODEL_URL, KOKORO_VOICES_DOWNLOAD_URL as VOICES_URL
+from services.tts.src.tts_service import TTSConfig, TTSListener, TTSService
 
 
-def download(url: str, destination: Path) -> None:
-    import urllib.request
+class _CompletionListener(TTSListener):
+    """Makes the smoke test wait for real synthesis completion."""
 
-    if destination.exists():
-        return
+    def __init__(self) -> None:
+        self.completed = threading.Event()
+        self.chunk_count = 0
 
-    print(f"Downloading {destination.name}...")
-    urllib.request.urlretrieve(url, destination)
+    def on_synthesis_started(self) -> None:
+        print("Synthesis started.")
+
+    def on_audio_chunk(self, audio, sample_rate: int) -> None:
+        self.chunk_count += 1
+        print(f"Chunk {self.chunk_count}: {len(audio)} samples @ {sample_rate} Hz")
+
+    def on_synthesis_completed(self) -> None:
+        self.completed.set()
 
 
 def main() -> None:
-    model_dir = Path(tempfile.gettempdir()) / "kokoro-onnx"
-    model_dir.mkdir(exist_ok=True)
+    parser = argparse.ArgumentParser(description="Test a configured TTS backend.")
+    parser.add_argument("--backend", choices=("kokoro", "pocket"), help="Override VOICECHAT_TTS_BACKEND for this run.")
+    parser.add_argument("--text", default="Hello. This is a test of the TTS service.")
+    parser.add_argument("--timeout", type=float, default=60.0)
+    args = parser.parse_args()
 
-    model_path = model_dir / "kokoro-v1.0.onnx"
-    voices_path = model_dir / "voices-v1.0.bin"
-
-    download(MODEL_URL, model_path)
-    download(VOICES_URL, voices_path)
-
-    config = TTSConfig(
-        model_path=str(model_path),
-        voices_path=str(voices_path),
-    )
-
+    tts = TTSService(TTSConfig(backend=args.backend))
     player = AudioPlayer()
-    player.start()
-
-    tts = TTSService(config)
+    completion = _CompletionListener()
     tts.add_listener(player)
+    tts.add_listener(completion)
 
-    tts.start()
-
-    tts.speak("Hello. This is a test of the TTS service.")
-
-    time.sleep(5)
-
-    tts.stop()
-    player.stop()
+    player.start()
+    started = False
+    try:
+        tts.start()
+        started = True
+        print(f"Testing {type(tts).__name__}.")
+        tts.speak(args.text)
+        if not completion.completed.wait(args.timeout):
+            raise TimeoutError(f"TTS did not complete within {args.timeout:g} seconds.")
+        print(f"Synthesis completed with {completion.chunk_count} audio chunks.")
+    finally:
+        if started:
+            tts.stop()
+        player.stop()
 
 
 if __name__ == "__main__":

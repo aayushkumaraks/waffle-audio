@@ -8,14 +8,14 @@ using a locally hosted language model, and speaks the reply back through your sp
 ## How it works
 
 ```
-Microphone --> STT (Moonshine) --> LLM (Ollama) --> TTS (Kokoro) --> Speakers
+Microphone --> STT (Moonshine) --> LLM (Ollama) --> TTS (Kokoro / Pocket TTS) --> Speakers
 ```
 
 | Stage | Technology         | Notes                                      |
 |-------|--------------------|--------------------------------------------|
 | STT   | Moonshine          | Streaming speech-to-text, runs on CPU/GPU  |
 | LLM   | Ollama (local)     | Default model: qwen3.5:4b                  |
-| TTS   | Kokoro ONNX        | Neural text-to-speech, ONNX runtime        |
+| TTS   | Kokoro / Pocket TTS | Selectable streaming neural text-to-speech |
 | Audio | sounddevice / PortAudio | Cross-platform audio I/O              |
 
 ## Key features
@@ -37,7 +37,7 @@ services/
       sentence_gate.py    Adaptive silence-gap gate
   stt/            Moonshine streaming transcription wrapper
   llm/            Ollama HTTP provider + queue-based service
-  tts/            Kokoro ONNX synthesis service
+  tts/            Feature-flagged Kokoro and Pocket TTS services
   audio/          Blocking audio playback worker
 models/           Shared data models (Message)
 voiceModels/      Kokoro ONNX model files (not committed)
@@ -62,6 +62,9 @@ Start the API server:
 ```bash
 uv run python -m services.api.app
 ```
+
+Set `VOICECHAT_TTS_BACKEND=pocket` to use Pocket TTS. Omitting it (or setting
+`kokoro`) retains the existing Kokoro backend.
 
 Then open:
 

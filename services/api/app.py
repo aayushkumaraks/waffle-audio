@@ -23,8 +23,6 @@ from constants import (
     API_CORS_ALLOW_ORIGINS,
     API_HOST,
     API_PORT,
-    TTS_MODEL_PATH,
-    TTS_VOICES_PATH,
 )
 from models import Message
 from services.audio.src import AudioPlayer
@@ -161,12 +159,7 @@ class ServiceRuntime:
         provider = LLMProvider(LLMProviderConfig())
         llm = LLMService(provider)
 
-        tts = TTSService(
-            TTSConfig(
-                model_path=TTS_MODEL_PATH,
-                voices_path=TTS_VOICES_PATH,
-            )
-        )
+        tts = TTSService(TTSConfig())
 
         player = AudioPlayer()
         tts.add_listener(player)

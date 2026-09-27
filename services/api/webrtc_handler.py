@@ -61,7 +61,7 @@ def _frame_to_float32_mono(frame: av.AudioFrame) -> npt.NDArray[np.float32]:
 # ─── TTS → WebRTC audio track ────────────────────────────────────────────────
 
 class TTSOutputTrack(AudioStreamTrack, TTSListener):
-    """Streams Kokoro TTS audio to the browser via WebRTC.
+    """Streams selected TTS-backend audio to the browser via WebRTC.
 
     Registered as a TTSListener so it receives on_audio_chunk() calls from the
     TTS worker thread, which are posted back to the event loop and buffered.

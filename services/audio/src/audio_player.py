@@ -70,44 +70,39 @@ class AudioPlayer(TTSListener):
         pass
 
     def _playback_worker(self) -> None:
-        while True:
-            item = self._playback_queue.get()
+        stream: sd.OutputStream | None = None
+        stream_rate: int | None = None
+        try:
+            while True:
+                item = self._playback_queue.get()
 
-            if item is _STOP:
-                break
+                if item is _STOP:
+                    break
 
-            audio, sample_rate = item
-
-            logger.info(
-                "Playing audio (%d samples @ %d Hz)",
-                len(audio),
-                sample_rate,
-            )
-
-            try:
-                stereo_audio = np.column_stack((audio, audio))
-
-                logger.info("Calling blocking play")
-                logger.info(
-                    "audio.shape=%s dtype=%s",
-                    audio.shape,
-                    audio.dtype,
-                )
-
-                self._playing.set()
+                audio, sample_rate = item
                 try:
-                    with sd.OutputStream(
-                        samplerate=sample_rate,
-                        channels=2,
-                        dtype="float32",
-                    ) as stream:
-                        stream.write(stereo_audio)
+                    # Keep one stream open for adjacent TTS chunks. Reopening the
+                    # device for every generated chunk causes timing gaps and lets
+                    # microphone input leak back into the conversation loop.
+                    if stream is None or stream_rate != sample_rate:
+                        if stream is not None:
+                            stream.close()
+                        stream = sd.OutputStream(
+                            samplerate=sample_rate,
+                            channels=2,
+                            dtype="float32",
+                        )
+                        stream.start()
+                        stream_rate = sample_rate
+
+                    self._playing.set()
+                    stream.write(np.column_stack((audio, audio)))
+                except Exception:
+                    logger.exception("Audio playback failed.")
                 finally:
+                    # The queue is intentionally serialized, so this clears only
+                    # after the current chunk has reached the output device.
                     self._playing.clear()
-
-                logger.info("Returned from blocking play")
-
-                logger.info("Playback finished.")
-
-            except Exception:
-                logger.exception("Audio playback failed.")
+        finally:
+            if stream is not None:
+                stream.close()

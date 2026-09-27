@@ -9,7 +9,6 @@ from services.conversation.src import ConversationManager
 from services.llm.src import LLMProvider, LLMProviderConfig, LLMService
 from services.stt.src import AudioQueueFull, STTService
 from services.tts.src import TTSConfig, TTSService
-from constants import OLLAMA_BASE_URL, OLLAMA_MODEL, TTS_MODEL_PATH, TTS_VOICES_PATH
 
 
 logging.basicConfig(
@@ -28,12 +27,7 @@ provider = LLMProvider(
 
 llm = LLMService(provider)
 
-tts = TTSService(
-    TTSConfig(
-        model_path=TTS_MODEL_PATH,
-        voices_path=TTS_VOICES_PATH,
-    )
-)
+tts = TTSService(TTSConfig())
 
 player = AudioPlayer()
 
