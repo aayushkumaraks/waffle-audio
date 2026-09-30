@@ -89,3 +89,20 @@ The default Stage 1 configuration is:
 | Backend frame | 512 samples |
 
 This stage detects speech versus non-speech. It does not distinguish the user's voice from another speaker such as a TV. Target-speaker verification and noise suppression are planned as subsequent stages.
+
+
+## Staged audio processing roadmap
+
+Audio preprocessing is isolated from `ConversationManager` in `services/audio_processing`.
+Each stage has its own provider-independent contract and can be implemented,
+benchmarked, enabled, or replaced independently.
+
+1. **Stage 1 — VAD:** Silero VAD is active. Detect speech and gate audio before STT.
+2. **Stage 2 — Noise suppression:** clean background noise while preserving speech.
+3. **Stage 3 — Echo cancellation:** remove assistant playback from microphone input and enable reliable barge-in.
+4. **Stage 4 — Target-speaker verification:** accept speech matching the enrolled user voice and reject unrelated speakers such as TV dialogue.
+5. **Stage 5 — Source separation:** optionally extract the target speaker when multiple voices overlap.
+6. **Stage 6 — Barge-in:** coordinate target-speaker speech with TTS interruption.
+
+Stages 2–6 currently expose pass-through/coordination interfaces only. They are
+disabled by default and do not change current behavior.
