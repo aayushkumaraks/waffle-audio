@@ -26,7 +26,7 @@ from constants import (
 )
 from models import Message
 from services.audio.src import AudioPlayer
-from services.audio_processing.src import VADService
+from services.audio_processing.src import AudioPipeline, VADConfig, VADService
 from services.conversation.src import ConversationManager
 from services.llm.src import LLMListener, LLMProvider, LLMProviderConfig, LLMService
 from services.api.webrtc_handler import close_all as _webrtc_close_all
@@ -151,13 +151,13 @@ class ServiceRuntime:
     player: AudioPlayer
     conversation: ConversationManager
     transcript_collector: _TranscriptCollector
-    vad: VADService
+    audio_pipeline: AudioPipeline
     running: bool = False
 
     @classmethod
     def create(cls) -> "ServiceRuntime":
         stt = STTService(STTConfig())
-        vad = VADService()
+        audio_pipeline = AudioPipeline(VADService(VADConfig()))
 
         provider = LLMProvider(LLMProviderConfig())
         llm = LLMService(provider)
@@ -179,7 +179,7 @@ class ServiceRuntime:
             player=player,
             conversation=conversation,
             transcript_collector=transcript_collector,
-            vad=vad,
+            audio_pipeline=audio_pipeline,
         )
 
     def start(self) -> None:
@@ -187,7 +187,7 @@ class ServiceRuntime:
             return
 
         self.player.start()
-        self.vad.start()
+        self.audio_pipeline.start()
         self.tts.start()
         self.llm.start()
         self.conversation.start()
@@ -201,7 +201,7 @@ class ServiceRuntime:
             return
 
         self.stt.stop()
-        self.vad.stop()
+        self.audio_pipeline.stop()
         self.conversation.stop()
         self.llm.stop()
         self.tts.stop()
@@ -350,7 +350,7 @@ class WebRTCOfferRequest(BaseModel):
 @app.post("/webrtc/offer")
 async def webrtc_offer(offer: WebRTCOfferRequest) -> dict[str, str]:
     """Exchange SDP: accept a browser offer and return the server answer."""
-    return await _webrtc_create_answer(offer.sdp, offer.type, runtime.tts, runtime.stt, runtime.vad)
+    return await _webrtc_create_answer(offer.sdp, offer.type, runtime.tts, runtime.stt, runtime.audio_pipeline)
 
 
 @app.get("/audio/status")
