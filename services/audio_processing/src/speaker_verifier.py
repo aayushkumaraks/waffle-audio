@@ -17,7 +17,7 @@ class TargetSpeakerVerifier(Protocol):
 
 
 class PassthroughTargetSpeakerVerifier:
-    """Stage 4 boundary; accepts speech until verification is enabled."""
+    """ boundary; accepts speech until verification is enabled."""
 
     def is_target_speaker(self, audio: AudioBuffer, sample_rate: int) -> bool:
         return True

@@ -1,1 +1,1 @@
-"""Audio preprocessing services."""\n
+"""Modular audio preprocessing and speech-processing services."""
