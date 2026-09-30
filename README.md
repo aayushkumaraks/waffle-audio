@@ -8,7 +8,7 @@ using a locally hosted language model, and speaks the reply back through your sp
 ## How it works
 
 ```
-Microphone --> STT (Moonshine) --> LLM (Ollama) --> TTS (Kokoro / Pocket TTS) --> Speakers
+Microphone --> VAD (Silero) --> STT (Moonshine) --> LLM (Ollama) --> TTS (Kokoro / Pocket TTS) --> Speakers
 ```
 
 | Stage | Technology         | Notes                                      |
@@ -71,3 +71,21 @@ Then open:
 ```text
 http://localhost:3000/docs
 ```
+
+
+## Voice activity detection
+
+The WebRTC microphone path uses Silero VAD before Moonshine. VAD only gates audio admission to STT; it does not change the existing STTListener events or ConversationManager / SentenceGate behavior.
+
+The default Stage 1 configuration is:
+
+| Setting | Default |
+|---|---:|
+| Sample rate | 16 kHz |
+| VAD threshold | 0.5 |
+| Minimum silence | 300 ms |
+| Speech padding | 100 ms |
+| Pre-speech padding | 200 ms |
+| Backend frame | 512 samples |
+
+This stage detects speech versus non-speech. It does not distinguish the user's voice from another speaker such as a TV. Target-speaker verification and noise suppression are planned as subsequent stages.
