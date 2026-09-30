@@ -17,7 +17,7 @@ import numpy.typing as npt
 from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription
 from aiortc.mediastreams import AudioStreamTrack
 
-from services.audio_processing.src import VADService
+from services.audio_processing.src import AudioPipeline
 from services.stt.src.stt_service import AudioQueueFull, STTService
 from services.tts.src.tts_service import AudioBuffer, TTSListener
 
@@ -107,7 +107,7 @@ class TTSOutputTrack(AudioStreamTrack, TTSListener):
 async def _receive_browser_audio(
     track: MediaStreamTrack,
     stt: STTService,
-    vad: VADService,
+    audio_pipeline: AudioPipeline,
 ) -> None:
     """Continuously read browser audio, gate it with VAD, then push to STT."""
     try:
@@ -121,7 +121,7 @@ async def _receive_browser_audio(
             samples_16k = _resample(samples, frame.sample_rate, _STT_RATE)
 
             try:
-                speech_audio = vad.process(samples_16k, _STT_RATE)
+                speech_audio = audio_pipeline.process(samples_16k, _STT_RATE)
             except Exception:
                 logger.exception("VAD processing failed.")
                 continue
@@ -135,7 +135,7 @@ async def _receive_browser_audio(
                 pass
     finally:
         # Ensure the next browser session starts from a clean VAD state.
-        vad.reset()
+        audio_pipeline.reset()
 
 
 async def create_answer(
@@ -143,7 +143,7 @@ async def create_answer(
     sdp_type: str,
     tts,
     stt: STTService,
-    vad: VADService,
+    audio_pipeline: AudioPipeline,
 ) -> dict[str, str]:
     """Accept a WebRTC offer and return the SDP answer."""
     loop = asyncio.get_event_loop()
@@ -157,7 +157,7 @@ async def create_answer(
     @pc.on("track")
     async def on_track(track: MediaStreamTrack) -> None:
         if track.kind == "audio":
-            asyncio.create_task(_receive_browser_audio(track, stt, vad))
+            asyncio.create_task(_receive_browser_audio(track, stt, audio_pipeline))
 
     @pc.on("connectionstatechange")
     async def on_state_change() -> None:
