@@ -26,7 +26,7 @@ from constants import (
 )
 from models import Message
 from services.audio.src import AudioPlayer
-from services.audio_processing.src import VADService
+from services.audio_processing.src import VADConfig, VADService
 from services.conversation.src import ConversationManager
 from services.llm.src import LLMListener, LLMProvider, LLMProviderConfig, LLMService
 from services.api.webrtc_handler import close_all as _webrtc_close_all
