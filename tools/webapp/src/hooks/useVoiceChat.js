@@ -369,6 +369,10 @@ export function useVoiceChat() {
 
     let peer
     try {
+      await api.delete('/stt/transcripts')
+      const existingHistory = await (await api.get('/conversation/history')).json()
+      knownHistoryRef.current = existingHistory.length
+
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
