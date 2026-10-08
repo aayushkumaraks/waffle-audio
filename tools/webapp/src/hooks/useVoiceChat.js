@@ -161,7 +161,11 @@ export function useVoiceChat() {
       ))
 
       setStatusLabel('Speaking…')
-      await speak(response)
+      try {
+        await speak(response)
+      } catch (error) {
+        addMessage('error', error.message || 'The response was generated but audio playback failed.')
+      }
       if (mountedRef.current) {
         setStatusLabel('Ready')
         setStatusState('idle')
@@ -273,8 +277,9 @@ export function useVoiceChat() {
     setStatusLabel('Listening…')
     setStatusState('recording')
 
+    let stream
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
           echoCancellation: true,
@@ -293,7 +298,7 @@ export function useVoiceChat() {
       recorder.start(100)
       recordingTimerRef.current = window.setTimeout(() => finishRecording(), MAX_RECORDING_MS)
     } catch (error) {
-      streamCleanup()
+      stream?.getTracks().forEach(track => track.stop())
       addMessage('error', `Microphone access failed: ${error.message}`)
       busyRef.current = false
       setStatusLabel('Ready')
@@ -512,6 +517,3 @@ export function useVoiceChat() {
   }
 }
 
-function streamCleanup() {
-  // The stream is not available when getUserMedia itself rejects.
-}
