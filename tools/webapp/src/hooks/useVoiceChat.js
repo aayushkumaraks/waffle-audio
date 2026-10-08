@@ -389,7 +389,9 @@ export function useVoiceChat() {
       })
       localStreamRef.current = stream
 
-      peer = new RTCPeerConnection()
+      peer = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+      })
       peerRef.current = peer
 
       stream.getAudioTracks().forEach(track => peer.addTrack(track, stream))
