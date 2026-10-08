@@ -26,7 +26,6 @@ from constants import (
 )
 from models import Message
 from services.audio.src import AudioPlayer
-from services.audio_processing.src import VADService
 from services.conversation.src import ConversationManager
 from services.llm.src import LLMListener, LLMProvider, LLMProviderConfig, LLMService
 from services.api.webrtc_handler import close_all as _webrtc_close_all
@@ -151,14 +150,11 @@ class ServiceRuntime:
     player: AudioPlayer
     conversation: ConversationManager
     transcript_collector: _TranscriptCollector
-    vad: VADService
     running: bool = False
 
     @classmethod
     def create(cls) -> "ServiceRuntime":
         stt = STTService(STTConfig())
-        vad = VADService()
-
         provider = LLMProvider(LLMProviderConfig())
         llm = LLMService(provider)
 
@@ -179,7 +175,6 @@ class ServiceRuntime:
             player=player,
             conversation=conversation,
             transcript_collector=transcript_collector,
-            vad=vad,
         )
 
     def start(self) -> None:
@@ -187,7 +182,6 @@ class ServiceRuntime:
             return
 
         self.player.start()
-        self.vad.start()
         self.tts.start()
         self.llm.start()
         self.conversation.start()
@@ -201,7 +195,6 @@ class ServiceRuntime:
             return
 
         self.stt.stop()
-        self.vad.stop()
         self.conversation.stop()
         self.llm.stop()
         self.tts.stop()
@@ -350,7 +343,7 @@ class WebRTCOfferRequest(BaseModel):
 @app.post("/webrtc/offer")
 async def webrtc_offer(offer: WebRTCOfferRequest) -> dict[str, str]:
     """Exchange SDP: accept a browser offer and return the server answer."""
-    return await _webrtc_create_answer(offer.sdp, offer.type, runtime.tts, runtime.stt, runtime.vad)
+    return await _webrtc_create_answer(offer.sdp, offer.type, runtime.tts, runtime.stt, VADConfig())
 
 
 @app.get("/audio/status")

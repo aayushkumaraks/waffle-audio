@@ -22,7 +22,7 @@ class EchoCanceller(Protocol):
 
 
 class PassthroughEchoCanceller:
-    """Stage 3 boundary; preserves audio until a real AEC is selected."""
+    """ boundary; preserves audio until a real AEC is selected."""
 
     def process(
         self,

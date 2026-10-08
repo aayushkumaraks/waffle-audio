@@ -8,16 +8,16 @@ import numpy.typing as npt
 AudioBuffer = npt.NDArray[np.float32]
 
 
-class TargetSpeakerExtractor(Protocol):
-    """Contract for extracting the target speaker from mixed audio."""
+class NoiseSuppressor(Protocol):
+    """Contract for speech-preserving background-noise suppression."""
 
     def process(self, audio: AudioBuffer, sample_rate: int) -> AudioBuffer:
-        """Return a target-speaker-focused signal."""
+        """Return an enhanced audio signal at the same sample rate."""
         ...
 
 
-class PassthroughTargetSpeakerExtractor:
-    """Stage 5 boundary; no separation until a model is selected."""
+class PassthroughNoiseSuppressor:
+    """ boundary; preserves audio until a real suppressor is selected."""
 
     def process(self, audio: AudioBuffer, sample_rate: int) -> AudioBuffer:
         return audio
