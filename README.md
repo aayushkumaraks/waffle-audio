@@ -77,7 +77,7 @@ http://localhost:3000/docs
 
 The WebRTC microphone path uses Silero VAD before Moonshine. VAD only gates audio admission to STT; it does not change the existing STTListener events or ConversationManager / SentenceGate behavior.
 
-The default Stage 1 configuration is:
+The default VAD configuration is:
 
 | Setting | Default |
 |---|---:|
@@ -88,4 +88,4 @@ The default Stage 1 configuration is:
 | Pre-speech padding | 200 ms |
 | Backend frame | 512 samples |
 
-This stage detects speech versus non-speech. It does not distinguish the user's voice from another speaker such as a TV. Target-speaker verification and noise suppression are planned as subsequent stages.
+This component detects speech versus non-speech. It does not distinguish the user's voice from another speaker such as a TV. Target-speaker verification and noise suppression can be added independently.
