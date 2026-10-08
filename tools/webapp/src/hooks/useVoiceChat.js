@@ -14,8 +14,8 @@ function defaultApiUrl() {
   if (configured) return normalizeBaseUrl(configured)
 
   const { protocol, hostname, port } = window.location
-  if (protocol === 'file:') return 'http://localhost:8000'
-  if (port === '5173' || port === '4173') return `http://${hostname}:8000`
+  if (protocol === 'file:') return 'http://localhost:3000'
+  if (port === '5173' || port === '4173') return `http://${hostname}:3000`
   return window.location.origin
 }
 
