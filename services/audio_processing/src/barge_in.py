@@ -11,7 +11,7 @@ class BargeInConfig:
 
 
 class BargeInController:
-    """ boundary for user interruption of TTS."""
+    """Boundary for user interruption of TTS."""
 
     def __init__(
         self,
