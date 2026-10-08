@@ -1,74 +1,98 @@
 # Waffle Webapp
 
-The Waffle Webapp is the React single-page application for the Waffle Audio voice assistant.
+The Waffle Webapp is the production React single-page application for the Waffle Audio assistant.
 
 ## Requirements
 
 - Node.js 20+
 - npm 10+
-- The Waffle Audio API running
+- A running Waffle Audio API
+- A browser with microphone and WebRTC support for voice modes
 
-## Start the webapp
+## Development
 
 From the repository root:
 
 ```bash
-./tools/webapp/start.sh
+bash ./tools/webapp/start.sh
 ```
 
-The script enters the webapp directory, installs dependencies if `node_modules` is missing, and starts Vite on all interfaces.
-
-Alternatively:
+Or:
 
 ```bash
 cd tools/webapp
-npm install
+npm ci
 npm run dev -- --host 0.0.0.0
 ```
 
-Vite will print the local URL, normally:
+Vite normally starts at `http://localhost:5173`. The development app automatically targets `http://localhost:8000` when it detects Vite's development ports.
 
-```
-http://localhost:5173
-```
+If the API is elsewhere, change the **API base URL** in the header. The value is persisted in the browser.
 
-Open that URL in a browser.
+You can also set `VITE_API_URL` before starting Vite:
 
-## API endpoint
-
-By default, the SPA uses the browser's current origin as the API base URL. This is suitable when the API serves the webapp itself.
-
-The API endpoint can also be changed from the endpoint field in the webapp header.
-
-For a separately running API, enter its base URL, for example:
-
-```
-http://localhost:8000
+```bash
+VITE_API_URL=http://localhost:8000 npm run dev -- --host 0.0.0.0
 ```
 
-## Production build
+## Production
+
+Build the SPA:
 
 ```bash
 cd tools/webapp
-npm install
+npm ci
 npm run build
 ```
 
-The production bundle is generated in:
+The generated bundle is written to `tools/webapp/dist/`.
+
+The Vite configuration uses relative asset paths so the generated SPA can be mounted by the FastAPI service at:
 
 ```
-tools/webapp/dist/
+/ui
 ```
 
-Preview the production build with:
+The API already mounts `tools/webapp` at `/ui`. Start the API using the repository's normal API entrypoint, then open `http://localhost:8000/ui` (or the configured API host/port).
+
+For a local preview of the production bundle:
 
 ```bash
-npm run preview
+npm run preview -- --host 0.0.0.0
 ```
 
-## Architecture
+## Functional modes
 
-The SPA is intentionally split by responsibility:
+### Text chat
+
+1. Confirm the API indicator is green.
+2. Type a message.
+3. Press Enter or the send button.
+4. The browser calls `/llm/generate`, displays the response, then requests WAV audio from `/tts/synthesize`.
+
+### Push-to-talk
+
+1. Hold the microphone button.
+2. Release to stop recording.
+3. The browser converts the recording to mono 16 kHz PCM.
+4. PCM is sent to `/stt/push`.
+5. The browser waits for a completed transcript from `/stt/transcripts`.
+6. The transcript is processed through the same LLM + TTS turn flow.
+
+Microphone access requires a secure context in browsers: HTTPS in production, or localhost during development.
+
+### Live voice
+
+1. Click **Live voice**.
+2. Grant microphone permission.
+3. The browser creates a WebRTC offer and sends it to `/webrtc/offer`.
+4. The API streams synthesized assistant audio back over WebRTC.
+5. The UI polls transcript and conversation-history endpoints for visible conversation state.
+6. Click **End live** to close the peer connection and microphone tracks.
+
+The live path intentionally relies on the server's existing VAD/STT/LLM/TTS pipeline rather than duplicating that pipeline in the browser.
+
+## Architecture
 
 ```text
 tools/webapp/
@@ -86,14 +110,17 @@ tools/webapp/
 │   └── main.jsx
 ├── index.html
 ├── package.json
+├── package-lock.json
 ├── vite.config.js
 └── start.sh
 ```
 
-The browser-facing interaction layer lives in the React app. API calls remain behind the small API client, while voice/conversation orchestration is isolated in the voice-chat hook.
+The UI layer is separated from transport and voice orchestration. The API client centralizes HTTP error handling, while `useVoiceChat` owns browser media, WebRTC lifecycle, conversation state, and mode transitions.
 
-## Modes
+## Operational notes
 
-- **Text:** send a typed message and receive the assistant response with TTS playback.
-- **Push-to-talk:** hold the microphone button, release to transcribe and process the turn.
-- **Live voice:** establish a WebRTC session for continuous voice interaction.
+- The browser never needs direct access to Ollama, STT, or TTS providers.
+- API errors are surfaced as conversation/system messages instead of being silently swallowed in user-initiated turns.
+- Live-session polling failures are tolerated because the media connection is independent of the UI polling loop.
+- Microphone tracks and WebRTC peers are explicitly stopped on disconnect and component unmount.
+- The API URL is stored locally in the browser and can be changed without rebuilding the app.
