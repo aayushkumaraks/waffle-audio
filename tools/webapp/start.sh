@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 
 if [ ! -d node_modules ]; then
   echo "Installing webapp dependencies..."
-  npm install
+  npm ci
 fi
 
-exec npm run dev -- --host 0.0.0.0
+exec npm run start
