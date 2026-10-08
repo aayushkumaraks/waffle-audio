@@ -71,4 +71,14 @@ TTS_QUANTIZE: bool = os.getenv("VOICECHAT_TTS_QUANTIZE", "false").lower() in {
 
 API_HOST: str = os.getenv("VOICECHAT_API_HOST", "0.0.0.0")
 API_PORT: int = _int_from_env("VOICECHAT_API_PORT", 3000)
-API_CORS_ALLOW_ORIGINS: str = os.getenv("VOICECHAT_CORS_ALLOW_ORIGINS", "*")
+
+# Browser origins allowed to call the API during local development and when
+# the SPA is served separately. Same-origin production (/ui) does not require
+# a CORS entry. Override this with a comma-separated list in production.
+API_CORS_ALLOW_ORIGINS: str = os.getenv(
+    "VOICECHAT_CORS_ALLOW_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173,"
+    "http://localhost:4173,http://127.0.0.1:4173,"
+    "http://localhost:3000,http://127.0.0.1:3000,"
+    "http://localhost:8000,http://127.0.0.1:8000",
+)
