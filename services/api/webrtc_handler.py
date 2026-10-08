@@ -14,7 +14,13 @@ from typing import Optional
 import av
 import numpy as np
 import numpy.typing as npt
-from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription
+from aiortc import (
+    MediaStreamTrack,
+    RTCConfiguration,
+    RTCIceServer,
+    RTCPeerConnection,
+    RTCSessionDescription,
+)
 from aiortc.mediastreams import AudioStreamTrack
 
 from services.audio_processing.src import VADService
@@ -147,7 +153,11 @@ async def create_answer(
 ) -> dict[str, str]:
     """Accept a WebRTC offer and return the SDP answer."""
     loop = asyncio.get_event_loop()
-    pc = RTCPeerConnection()
+    pc = RTCPeerConnection(
+        RTCConfiguration(
+            iceServers=[RTCIceServer(urls=["stun:stun.l.google.com:19302"])]
+        )
+    )
     _peer_connections.add(pc)
 
     tts_track = TTSOutputTrack(loop=loop)
