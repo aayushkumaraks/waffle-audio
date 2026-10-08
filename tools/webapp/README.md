@@ -47,6 +47,12 @@ npm run build
 
 The generated bundle is written to `tools/webapp/dist/`.
 
+The API allows the local Vite/preview origins by default. For a different frontend origin, set `VOICECHAT_CORS_ALLOW_ORIGINS` to a comma-separated allowlist, for example:
+
+```bash
+export VOICECHAT_CORS_ALLOW_ORIGINS="https://app.example.com"
+```
+
 The Vite configuration uses relative asset paths so the generated SPA can be mounted by the FastAPI service at:
 
 ```
