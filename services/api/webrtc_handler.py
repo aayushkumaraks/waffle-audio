@@ -17,7 +17,7 @@ import numpy.typing as npt
 from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription
 from aiortc.mediastreams import AudioStreamTrack
 
-from services.audio_processing.src import VADService
+from services.audio_processing.src import VADConfig, VADService
 from services.stt.src.stt_service import AudioQueueFull, STTService
 from services.tts.src.tts_service import AudioBuffer, TTSListener
 
@@ -143,12 +143,14 @@ async def create_answer(
     sdp_type: str,
     tts,
     stt: STTService,
-    vad: VADService,
+    vad_config: VADConfig,
 ) -> dict[str, str]:
     """Accept a WebRTC offer and return the SDP answer."""
     loop = asyncio.get_event_loop()
     pc = RTCPeerConnection()
     _peer_connections.add(pc)
+    vad = VADService(vad_config)
+    vad.start()
 
     tts_track = TTSOutputTrack(loop=loop)
     tts.add_listener(tts_track)
@@ -164,6 +166,7 @@ async def create_answer(
         logger.info("WebRTC peer state: %s", pc.connectionState)
         if pc.connectionState in ("failed", "closed", "disconnected"):
             tts.remove_listener(tts_track)
+            vad.stop()
             _peer_connections.discard(pc)
 
     await pc.setRemoteDescription(
