@@ -350,7 +350,7 @@ class WebRTCOfferRequest(BaseModel):
 @app.post("/webrtc/offer")
 async def webrtc_offer(offer: WebRTCOfferRequest) -> dict[str, str]:
     """Exchange SDP: accept a browser offer and return the server answer."""
-    return await _webrtc_create_answer(offer.sdp, offer.type, runtime.tts, runtime.stt, runtime.vad)
+    return await _webrtc_create_answer(offer.sdp, offer.type, runtime.tts, runtime.stt, VADConfig())
 
 
 @app.get("/audio/status")
