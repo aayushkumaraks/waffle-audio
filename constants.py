@@ -56,7 +56,7 @@ KOKORO_MODEL_PATH: str = "voiceModels/kokoro-v1.0.onnx"
 KOKORO_VOICES_PATH: str = "voiceModels/voices-v1.0.bin"
 KOKORO_DEFAULT_VOICE: str = "af_sarah"
 KOKORO_DEFAULT_LANGUAGE: str = "en-us"
-POCKET_TTS_DEFAULT_VOICE: str = "alba"
+POCKET_TTS_DEFAULT_VOICE: str = "anna"
 POCKET_TTS_DEFAULT_LANGUAGE: str = "english"
 POCKET_TTS_CACHE_DIR: str = os.getenv(
     "VOICECHAT_POCKET_TTS_CACHE_DIR", "voiceModels/pocket-tts-cache"
