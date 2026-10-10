@@ -11,6 +11,8 @@ import asyncio
 import json
 import logging
 import os
+import random
+import socket
 from typing import Optional
 
 import av
@@ -36,8 +38,80 @@ _FRAME_SAMPLES = 960
 _STT_RATE = 16_000
 _ICE_GATHERING_TIMEOUT_SECONDS = 10.0
 _DEFAULT_STUN_SERVERS = "stun:stun.l.google.com:19302"
+_DEFAULT_ICE_PORT_MIN = 50000
+_DEFAULT_ICE_PORT_MAX = 50100
 
 _peer_connections: set[RTCPeerConnection] = set()
+
+
+
+def _configure_aioice_port_range() -> None:
+    """Constrain aioice's dynamically allocated UDP sockets when configured.
+
+    aioice does not expose a public port-range option. Its candidate allocator
+    binds to port zero; wrapping only the loop's datagram endpoint creation keeps
+    allocation inside the configured range without rewriting candidate ports.
+    """
+    minimum = int(os.getenv("VOICECHAT_WEBRTC_UDP_PORT_MIN", _DEFAULT_ICE_PORT_MIN))
+    maximum = int(os.getenv("VOICECHAT_WEBRTC_UDP_PORT_MAX", _DEFAULT_ICE_PORT_MAX))
+    if not (1 <= minimum <= maximum <= 65535):
+        raise ValueError("VOICECHAT_WEBRTC_UDP_PORT_MIN/MAX must describe a valid UDP port range.")
+
+    loop = asyncio.get_running_loop()
+    original = getattr(loop, "_waffle_original_create_datagram_endpoint", None)
+    if original is not None:
+        return
+
+    original = loop.create_datagram_endpoint
+    setattr(loop, "_waffle_original_create_datagram_endpoint", original)
+
+    async def create_datagram_endpoint(protocol_factory, *args, **kwargs):
+        local_addr = kwargs.get("local_addr")
+        if local_addr and len(local_addr) >= 2 and local_addr[1] == 0:
+            host = local_addr[0]
+            last_error = None
+            # Randomized start avoids always contending for the lowest port.
+            width = maximum - minimum + 1
+            start = random.randrange(width)
+            for offset in range(width):
+                port = minimum + ((start + offset) % width)
+                kwargs_with_port = dict(kwargs)
+                kwargs_with_port["local_addr"] = (host, port, *local_addr[2:])
+                try:
+                    return await original(protocol_factory, *args, **kwargs_with_port)
+                except OSError as exc:
+                    last_error = exc
+            raise OSError(
+                f"No free UDP ports in configured WebRTC range {minimum}-{maximum}."
+            ) from last_error
+        return await original(protocol_factory, *args, **kwargs)
+
+    loop.create_datagram_endpoint = create_datagram_endpoint
+
+
+def _rewrite_advertised_candidates(sdp_text: str) -> str:
+    """Optionally advertise a host-reachable IP while retaining bound UDP ports."""
+    advertised_ip = os.getenv("VOICECHAT_WEBRTC_ADVERTISED_IP", "").strip()
+    if not advertised_ip:
+        return sdp_text
+
+    # ICE candidate addresses are space-delimited SDP fields. Only rewrite the
+    # address field in candidate lines and the related-address field for srflx.
+    rewritten = []
+    for line in sdp_text.splitlines():
+        if line.startswith("a=candidate:"):
+            fields = line.split()
+            if len(fields) >= 8 and fields[7] in ("host", "srflx"):
+                # Host candidates are safe to rewrite. A srflx candidate's
+                # related address is also a private host address.
+                fields[4] = advertised_ip
+                if "raddr" in fields:
+                    related_index = fields.index("raddr") + 1
+                    if related_index < len(fields):
+                        fields[related_index] = advertised_ip
+                line = " ".join(fields)
+        rewritten.append(line)
+    return "\r\n".join(rewritten) + "\r\n"
 
 
 def _ice_servers() -> list[RTCIceServer]:
@@ -220,6 +294,7 @@ async def create_answer(
 ) -> dict[str, str]:
     """Accept a browser offer and return an SDP answer with gathered ICE candidates."""
     loop = asyncio.get_running_loop()
+    _configure_aioice_port_range()
     pc = RTCPeerConnection(RTCConfiguration(iceServers=_ice_servers()))
     _peer_connections.add(pc)
 
@@ -257,7 +332,7 @@ async def create_answer(
             pc.iceGatheringState,
             sum(line.startswith("a=candidate:") for line in local.sdp.splitlines()),
         )
-        return {"sdp": local.sdp, "type": local.type}
+        return {"sdp": _rewrite_advertised_candidates(local.sdp), "type": local.type}
     except Exception:
         tts.remove_listener(tts_track)
         _peer_connections.discard(pc)

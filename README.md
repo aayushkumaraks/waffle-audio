@@ -82,7 +82,10 @@ Copy/edit `.env` as needed. Common variables:
 |---|---|---|
 | `VOICECHAT_TTS_BACKEND` | `pocket` | TTS backend; existing Kokoro code remains available |
 | `VOICECHAT_TTS_VOICE` | `alba` | Pocket TTS voice identifier |
-| `VOICECHAT_API_PORT` | `3000` | Published host port |
+| `VOICECHAT_API_PORT` | `3000` | Published host TCP port |
+| `VOICECHAT_WEBRTC_UDP_PORT_MIN` | `50000` | First UDP port reserved for WebRTC media |
+| `VOICECHAT_WEBRTC_UDP_PORT_MAX` | `50100` | Last UDP port reserved for WebRTC media |
+| `VOICECHAT_WEBRTC_ADVERTISED_IP` | unset | Optional host-reachable IP advertised in server ICE candidates; use the address reachable from the browser |
 | `VOICECHAT_CORS_ALLOW_ORIGINS` | `*` | Browser origin allowlist |
 | `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` in Compose | Host Ollama endpoint |
 | `OLLAMA_MODEL` | `qwen3.5:4b` | Local model name |
@@ -97,6 +100,10 @@ CLI microphone → STT (Moonshine) → ConversationManager → Ollama → Pocket
 ```
 
 The API and browser UI share one FastAPI process. The CLI is a separate entry point that reuses `ConversationManager`. The existing Kokoro implementation remains in the codebase.
+
+### WebRTC in Docker
+
+The API uses a bounded UDP port range for aiortc media sockets, and Compose publishes the same range. If the browser cannot reach the container-advertised IP, set `VOICECHAT_WEBRTC_ADVERTISED_IP` in `.env` to the host IP reachable from that browser (for example, the Windows host LAN IP when browsing from Firefox on Windows). The TCP API mapping does not carry WebRTC media. Open the configured UDP range in the host firewall as well. Do not set the advertised IP to the container bridge IP. This configuration avoids requiring a third-party TURN relay for a browser and container on the same host/network, but cannot guarantee reachability across restrictive NATs or firewalls.
 
 ## Development
 
