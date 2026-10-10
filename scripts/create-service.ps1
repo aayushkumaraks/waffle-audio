@@ -1,13 +1,13 @@
 $ErrorActionPreference = 'Stop'
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $AppDir = Split-Path -Parent $ScriptDir
-$RunScript = Join-Path $AppDir 'scripts\run.ps1'
-$TaskName = 'Waffle Audio'
-$PowerShell = (Get-Process -Id $PID).Path
-$Action = New-ScheduledTaskAction -Execute $PowerShell -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$RunScript`"" -WorkingDirectory $AppDir
-$Trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-$Settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Days 0) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-$Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Settings $Settings -Principal $Principal -Description 'Starts the local Waffle Audio API at user login.' -Force | Out-Null
-Write-Host "Login task '$TaskName' installed. Manage it in Task Scheduler."
-Write-Host "Remove with: Unregister-ScheduledTask -TaskName '$TaskName' -Confirm:`$false"
+Set-Location $AppDir
+if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { throw 'Docker Desktop is required.' }
+docker compose version *> $null
+if ($LASTEXITCODE -ne 0) { throw 'Docker Compose v2 is required.' }
+Write-Host 'This starts the web/API container in the background with restart: unless-stopped.'
+if ((Read-Host 'Continue? [y/N]') -notmatch '^(y|yes)$') { Write-Host "No changes made. Scripts are in $ScriptDir"; exit 0 }
+docker compose --profile web up --build -d waffle-audio
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$port = if ($env:VOICECHAT_API_PORT) { $env:VOICECHAT_API_PORT } else { '3000' }
+Write-Host "Web UI: http://localhost:$port/ui`nStop: docker compose --profile web down"
