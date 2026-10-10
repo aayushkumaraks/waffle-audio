@@ -1,91 +1,89 @@
-# Waffle-Audio
+# Waffle Audio
 
-A real-time, voice-to-voice AI assistant that runs entirely on your local machine.
+A local, real-time voice assistant: microphone audio is transcribed, a locally hosted LLM generates a reply, and speech is played back. The API also serves a browser UI.
 
-You speak into a microphone. The assistant transcribes what you say, generates a reply
-using a locally hosted language model, and speaks the reply back through your speakers.
+## One-click setup
 
-## How it works
+**macOS / Linux:** open a terminal and run:
 
-```
-Microphone --> VAD (Silero) --> STT (Moonshine) --> LLM (Ollama) --> TTS (Kokoro / Pocket TTS) --> Speakers
-```
-
-| Stage | Technology         | Notes                                      |
-|-------|--------------------|--------------------------------------------|
-| STT   | Moonshine          | Streaming speech-to-text, runs on CPU/GPU  |
-| LLM   | Ollama (local)     | Default model: qwen3.5:4b                  |
-| TTS   | Kokoro / Pocket TTS | Selectable streaming neural text-to-speech |
-| Audio | sounddevice / PortAudio | Cross-platform audio I/O              |
-
-## Key features
-
-- Echo cancellation: microphone input is muted while the assistant is speaking
-- Adaptive sentence gate: fragments the user speaks across short pauses are
-  accumulated before the LLM call, avoiding premature or duplicate responses
-- Conversation history: every turn is tracked and printed on exit
-- Voice-friendly LLM prompt: the model is instructed to reply in 1-2 plain
-  sentences with no emojis or markdown
-
-## Project structure
-
-```
-services/
-  conversation/   Orchestrates STT -> LLM -> TTS
-    src/
-      manager.py          ConversationManager
-      sentence_gate.py    Adaptive silence-gap gate
-  stt/            Moonshine streaming transcription wrapper
-  llm/            Ollama HTTP provider + queue-based service
-  tts/            Feature-flagged Kokoro and Pocket TTS services
-  audio/          Blocking audio playback worker
-models/           Shared data models (Message)
-voiceModels/      Kokoro ONNX model files (not committed)
-pyproject.toml    Dependencies managed by uv
+```bash
+curl -fsSL https://raw.githubusercontent.com/aayushkumaraks/waffle-audio/main/scripts/install.sh -o install-waffle-audio.sh
+bash install-waffle-audio.sh
 ```
 
-## Quick start
+**Windows:** open PowerShell and run:
 
-See [SETUP.md](SETUP.md) for first-time installation and [RUN.md](RUN.md) to start the
-app.
+```powershell
+irm https://raw.githubusercontent.com/aayushkumaraks/waffle-audio/main/scripts/install.ps1 -OutFile install-waffle-audio.ps1
+powershell -ExecutionPolicy Bypass -File .\install-waffle-audio.ps1
+```
 
-## HTTP API
+The installer checks Python 3.11, Git, `uv`, Ollama and audio prerequisites, installs Python dependencies, shows Pocket TTS voices, and asks whether to run now or configure launch-at-login. Windows users should use the native PowerShell scripts; Bash scripts on Windows require Git Bash or WSL.
 
-All services are exposed on one HTTP server process.
+Scripts are installed in `~/waffle-audio/scripts` by default (or the path set with `WAFFLE_AUDIO_DIR`):
 
-- Default port: `3000`
-- Configurable via environment variable: `VOICECHAT_API_PORT`
-- Host configurable via: `VOICECHAT_API_HOST`
+| Action | macOS / Linux / Git Bash | Windows PowerShell |
+|---|---|---|
+| Install | `scripts/install.sh` | `scripts/install.ps1` |
+| Run | `scripts/run.sh` | `scripts/run.ps1` |
+| Start on login | `scripts/create-service.sh` | `scripts/create-service.ps1` |
 
-Start the API server:
+Pocket TTS defaults to the `alba` voice. The installer offers a voice list and saves your choice in `.env`. Voices and licenses may change; see the [Pocket TTS voice catalog](https://huggingface.co/kyutai/tts-voices).
+
+## Requirements and configuration
+
+- Python **3.11** (the project currently requires `>=3.11,<3.12`)
+- [uv](https://docs.astral.sh/uv/)
+- [Ollama](https://ollama.com), with model `qwen3.5:4b`
+- Microphone and speakers; PortAudio may need a system package on macOS/Linux
+
+The installer can install `uv`, common PortAudio packages, and the Ollama model after asking. Install Ollama separately where needed and start it before running the app. WSL audio support depends on WSLg and the available PortAudio host API.
+
+Useful settings in `.env`:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VOICECHAT_TTS_BACKEND` | `pocket` | TTS engine selection (`pocket` or `kokoro`) |
+| `VOICECHAT_TTS_VOICE` | `alba` | Pocket TTS voice identifier |
+| `VOICECHAT_API_HOST` | `0.0.0.0` | API bind address |
+| `VOICECHAT_API_PORT` | `3000` | API port |
+| `VOICECHAT_CORS_ALLOW_ORIGINS` | `*` | Comma-separated browser origin allowlist, or `*` |
+| `OLLAMA_BASE_URL` | project default | Ollama endpoint; set this if Ollama is not at the configured address |
+| `OLLAMA_MODEL` | `qwen3.5:4b` | Ollama model name |
+
+## Use the app
+
+Start the API from the repository root:
 
 ```bash
 uv run python -m services.api.app
 ```
 
-Set `VOICECHAT_TTS_BACKEND=pocket` to use Pocket TTS. Omitting it (or setting
-`kokoro`) retains the existing Kokoro backend.
+- Browser UI: `http://localhost:3000/ui`
+- API documentation: `http://localhost:3000/docs`
+- Health check: `http://localhost:3000/health`
 
-Then open:
+Stop a foreground run with `Ctrl+C`. See [RUN.md](RUN.md) for endpoints and troubleshooting, or [SETUP.md](SETUP.md) for detailed audio and WSL notes.
+
+## Architecture
 
 ```text
-http://localhost:3000/docs
+Microphone → VAD (Silero) → STT (Moonshine) → LLM (Ollama) → TTS → Speakers
 ```
 
+- **STT:** Moonshine streaming transcription
+- **LLM:** local Ollama model
+- **TTS:** Pocket TTS by default; the existing Kokoro backend remains available in code
+- **Audio:** `sounddevice` / PortAudio
+- **API/UI:** FastAPI server with browser voice chat UI
 
-## Voice activity detection
+The conversation manager uses an adaptive sentence gate to avoid premature responses after short pauses. The WebRTC microphone path uses Silero VAD to gate speech before transcription; it does not identify speakers or replace noise suppression.
 
-The WebRTC microphone path uses Silero VAD before Moonshine. VAD only gates audio admission to STT; it does not change the existing STTListener events or ConversationManager / SentenceGate behavior.
+## Development
 
-The default Stage 1 configuration is:
+```bash
+uv sync
+uv run pytest
+```
 
-| Setting | Default |
-|---|---:|
-| Sample rate | 16 kHz |
-| VAD threshold | 0.5 |
-| Minimum silence | 300 ms |
-| Speech padding | 100 ms |
-| Pre-speech padding | 200 ms |
-| Backend frame | 512 samples |
-
-This stage detects speech versus non-speech. It does not distinguish the user's voice from another speaker such as a TV. Target-speaker verification and noise suppression are planned as subsequent stages.
+Python dependencies are defined in `pyproject.toml` and locked in `uv.lock`.
