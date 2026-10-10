@@ -11,7 +11,6 @@ import asyncio
 import json
 import logging
 import os
-import random
 from typing import Optional
 
 import av
@@ -69,11 +68,10 @@ def _configure_aioice_port_range() -> None:
         if local_addr and len(local_addr) >= 2 and local_addr[1] == 0:
             host = local_addr[0]
             last_error = None
-            # Randomized start avoids always contending for the lowest port.
+            # Try each permitted port in ascending order; this is predictable in tests.
             width = maximum - minimum + 1
-            start = random.randrange(width)
             for offset in range(width):
-                port = minimum + ((start + offset) % width)
+                port = minimum + offset
                 kwargs_with_port = dict(kwargs)
                 kwargs_with_port["local_addr"] = (host, port, *local_addr[2:])
                 try:
