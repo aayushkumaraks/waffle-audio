@@ -42,7 +42,6 @@ _DEFAULT_ICE_PORT_MAX = 50100
 _peer_connections: set[RTCPeerConnection] = set()
 
 
-
 def _configure_aioice_port_range() -> None:
     """Constrain aioice host UDP sockets to the published container port range.
 
@@ -86,6 +85,7 @@ def _configure_aioice_port_range() -> None:
 
     loop.create_datagram_endpoint = create_datagram_endpoint
 
+
 def _rewrite_advertised_candidates(sdp_text: str) -> str:
     """Optionally advertise a host-reachable IP while retaining UDP ports."""
     advertised_ip = os.getenv("VOICECHAT_WEBRTC_ADVERTISED_IP", "").strip()
@@ -103,6 +103,7 @@ def _rewrite_advertised_candidates(sdp_text: str) -> str:
                 line = " ".join(fields)
         rewritten.append(line)
     return "\r\n".join(rewritten) + "\r\n"
+
 
 def _ice_servers() -> list[RTCIceServer]:
     """Load ICE servers from JSON or a comma-separated URL list.
