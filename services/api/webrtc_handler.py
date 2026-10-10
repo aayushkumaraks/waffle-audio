@@ -304,8 +304,6 @@ async def create_answer(
     _peer_connections.add(pc)
 
     tts_track = TTSOutputTrack(loop=loop)
-    tts.add_listener(tts_track)
-    pc.addTrack(tts_track)
 
     @pc.on("track")
     async def on_track(track: MediaStreamTrack) -> None:
@@ -320,6 +318,8 @@ async def create_answer(
             _peer_connections.discard(pc)
 
     try:
+        tts.add_listener(tts_track)
+        pc.addTrack(tts_track)
         await pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type=sdp_type))
         answer = await pc.createAnswer()
         await pc.setLocalDescription(answer)
