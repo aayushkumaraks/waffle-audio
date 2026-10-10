@@ -35,26 +35,28 @@ You can also set `VITE_API_URL` before starting Vite:
 VITE_API_URL=http://localhost:3000 npm run dev -- --host 0.0.0.0
 ```
 
-### WebRTC ICE configuration
+### WebRTC ICE / TURN configuration
 
-Live voice uses a non-trickle SDP exchange: the browser and server gather ICE candidates before exchanging the offer and answer. By default, both use Google's public STUN server. If direct connectivity is blocked by NAT/firewall rules (common when a browser on Windows connects to a service running inside WSL2), configure reachable STUN/TURN servers on both sides.
+Your browser logs show that both peers gather candidates but every candidate pair fails. That means SDP signaling is working; the media path is not reachable. With the browser on Windows and FastAPI inside WSL2, a TURN relay may be required. STUN alone cannot guarantee connectivity, and a real TURN server must be provisioned/reachable; the application cannot create one by itself.
 
-Browser-side configuration accepts either a JSON array of standard `RTCIceServer` entries or a comma-separated URL list:
-
-```bash
-# Example STUN URL list; can also contain your TURN URL(s).
-VITE_ICE_SERVERS="stun:stun.l.google.com:19302" npm run dev -- --host 0.0.0.0
-```
-
-For TURN credentials, use JSON and avoid committing secrets to source control:
+Configure the same TURN service on both sides. The browser supports a JSON array of standard `RTCIceServer` objects through `VITE_ICE_SERVERS`. The server supports the same format through `VOICECHAT_ICE_SERVERS`:
 
 ```bash
-VITE_ICE_SERVERS='[{"urls":"turn:turn.example.com:3478","username":"YOUR_USERNAME","credential":"YOUR_PASSWORD"}]' npm run dev -- --host 0.0.0.0
+# Browser / Vite: set in the environment before starting Vite.
+VITE_ICE_SERVERS='[{"urls":"turn:YOUR_TURN_HOST:3478","username":"YOUR_TURN_USERNAME","credential":"YOUR_TURN_PASSWORD"}]' npm run dev -- --host 0.0.0.0
 ```
 
-The server must be configured with the same ICE server URLs through `VOICECHAT_ICE_SERVERS`, a comma-separated list such as `stun:stun.l.google.com:19302` or `turn:turn.example.com:3478`. The current server setting accepts URLs only; authenticated TURN credentials require extending the server configuration with credential support before use.
+```bash
+# Server / WSL: export before starting FastAPI. Keep credentials private.
+export VOICECHAT_ICE_SERVERS='[{"urls":"turn:YOUR_TURN_HOST:3478","username":"YOUR_TURN_USERNAME","credential":"YOUR_TURN_PASSWORD"}]'
+uv run python -m services.api.app
+```
 
-If ICE still fails, check browser console output for `[WebRTC] Browser ICE candidates gathered` and `[WebRTC] Server ICE candidates returned`, plus the API logs for `WebRTC peer state`. Having candidates does not guarantee a reachable media path; a TURN relay may be required. Do not expose TURN credentials in a public repository.
+Use the actual host, credentials, and transport settings from your TURN provider. For TURN over TLS, providers often supply a `turns:` URL and a specific port. Do not commit credentials or put production TURN credentials in a public repository. Since Vite variables are bundled into browser code, any credentials in `VITE_ICE_SERVERS` are visible to users; use short-lived/ephemeral TURN credentials for anything beyond local development.
+
+For STUN-only configurations, both variables may still be set to a comma-separated list such as `stun:stun.l.google.com:19302`. The server also accepts that legacy URL-list format. JSON format is required for authenticated TURN credentials.
+
+After configuring the relay, restart both Vite and FastAPI, then retry Live voice. Check the browser console for candidate counts and the selected candidate pair in `about:webrtc`. A successful ICE connection should reach `connected`; merely having candidates in the SDP is not proof they are reachable.
 
 ## Production
 
