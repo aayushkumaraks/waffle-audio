@@ -25,15 +25,36 @@ npm ci
 npm run dev -- --host 0.0.0.0
 ```
 
-Vite normally starts at `http://localhost:5173`. The development app automatically targets `http://localhost:8000` when it detects Vite's development ports.
+Vite normally starts at `http://localhost:5173`. The development app defaults to the API at `http://localhost:3000` when it detects Vite's development ports.
 
 If the API is elsewhere, change the **API base URL** in the header. The value is persisted in the browser.
 
 You can also set `VITE_API_URL` before starting Vite:
 
 ```bash
-VITE_API_URL=http://localhost:8000 npm run dev -- --host 0.0.0.0
+VITE_API_URL=http://localhost:3000 npm run dev -- --host 0.0.0.0
 ```
+
+### WebRTC ICE configuration
+
+Live voice uses a non-trickle SDP exchange: the browser and server gather ICE candidates before exchanging the offer and answer. By default, both use Google's public STUN server. If direct connectivity is blocked by NAT/firewall rules (common when a browser on Windows connects to a service running inside WSL2), configure reachable STUN/TURN servers on both sides.
+
+Browser-side configuration accepts either a JSON array of standard `RTCIceServer` entries or a comma-separated URL list:
+
+```bash
+# Example STUN URL list; can also contain your TURN URL(s).
+VITE_ICE_SERVERS="stun:stun.l.google.com:19302" npm run dev -- --host 0.0.0.0
+```
+
+For TURN credentials, use JSON and avoid committing secrets to source control:
+
+```bash
+VITE_ICE_SERVERS='[{"urls":"turn:turn.example.com:3478","username":"YOUR_USERNAME","credential":"YOUR_PASSWORD"}]' npm run dev -- --host 0.0.0.0
+```
+
+The server must be configured with the same ICE server URLs through `VOICECHAT_ICE_SERVERS`, a comma-separated list such as `stun:stun.l.google.com:19302` or `turn:turn.example.com:3478`. The current server setting accepts URLs only; authenticated TURN credentials require extending the server configuration with credential support before use.
+
+If ICE still fails, check browser console output for `[WebRTC] Browser ICE candidates gathered` and `[WebRTC] Server ICE candidates returned`, plus the API logs for `WebRTC peer state`. Having candidates does not guarantee a reachable media path; a TURN relay may be required. Do not expose TURN credentials in a public repository.
 
 ## Production
 
@@ -53,13 +74,9 @@ The API allows the local Vite/preview origins by default. For a different fronte
 export VOICECHAT_CORS_ALLOW_ORIGINS="https://app.example.com"
 ```
 
-The Vite configuration uses relative asset paths so the generated SPA can be mounted by the FastAPI service at:
+The Vite configuration uses relative asset paths so the generated SPA can be mounted by the FastAPI service at `/ui`.
 
-```
-/ui
-```
-
-The API already mounts `tools/webapp` at `/ui`. Start the API using the repository's normal API entrypoint, then open `http://localhost:8000/ui` (or the configured API host/port).
+The API mounts `tools/webapp` at `/ui`. Start the API using the repository's normal API entrypoint, then open `http://localhost:3000/ui` (or the configured API host/port).
 
 For a local preview of the production bundle:
 
@@ -91,10 +108,11 @@ Microphone access requires a secure context in browsers: HTTPS in production, or
 
 1. Click **Live voice**.
 2. Grant microphone permission.
-3. The browser creates a WebRTC offer and sends it to `/webrtc/offer`.
-4. The API streams synthesized assistant audio back over WebRTC.
-5. The UI polls transcript and conversation-history endpoints for visible conversation state.
-6. Click **End live** to close the peer connection and microphone tracks.
+3. The browser gathers ICE candidates, creates a WebRTC offer, and sends it to `/webrtc/offer`.
+4. The API gathers its own ICE candidates before returning the answer.
+5. The API streams synthesized assistant audio back over WebRTC.
+6. The UI polls transcript and conversation-history endpoints for visible conversation state.
+7. Click **End live** to close the peer connection and microphone tracks.
 
 The live path intentionally relies on the server's existing VAD/STT/LLM/TTS pipeline rather than duplicating that pipeline in the browser.
 
