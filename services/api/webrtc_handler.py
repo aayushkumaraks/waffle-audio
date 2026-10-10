@@ -57,15 +57,14 @@ def _configure_aioice_port_range() -> None:
     setattr(loop, "_waffle_original_create_datagram_endpoint", original)
 
     async def create_datagram_endpoint(protocol_factory, *args, **kwargs):
+        # asyncio.BaseEventLoop.create_datagram_endpoint(protocol_factory, *,
+        #   local_addr=...) is keyword-only in supported Python versions.
         local_addr = kwargs.get("local_addr")
-        positional_local = local_addr is None and bool(args)
-        if positional_local:
-            local_addr = args[0]
 
         if local_addr and len(local_addr) >= 2 and local_addr[1] == 0:
             return await _create_bound_endpoint(
                 original, protocol_factory, args, kwargs, local_addr,
-                minimum, maximum, positional_local,
+                minimum, maximum, False,
             )
         return await original(protocol_factory, *args, **kwargs)
 
