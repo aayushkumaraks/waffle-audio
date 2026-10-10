@@ -301,8 +301,6 @@ async def create_answer(
     loop = asyncio.get_running_loop()
     _configure_aioice_port_range()
     pc = RTCPeerConnection(RTCConfiguration(iceServers=_ice_servers()))
-    _peer_connections.add(pc)
-
     tts_track = TTSOutputTrack(loop=loop)
 
     @pc.on("track")
@@ -318,6 +316,7 @@ async def create_answer(
             _peer_connections.discard(pc)
 
     try:
+        _peer_connections.add(pc)
         tts.add_listener(tts_track)
         pc.addTrack(tts_track)
         await pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type=sdp_type))
