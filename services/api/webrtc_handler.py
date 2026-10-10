@@ -63,17 +63,26 @@ async def _wait_for_ice_gathering(
 
     completed = asyncio.Event()
 
-    @pc.on("icegatheringstatechange")
-    async def on_ice_gathering_state_change() -> None:
+    def on_ice_gathering_state_change() -> None:
         if pc.iceGatheringState == "complete":
             completed.set()
 
+    # aiortc's pyee handlers can be synchronous. Registering synchronously and
+    # using a regular callback avoids waiting for a coroutine event dispatch.
+    pc.on("icegatheringstatechange", on_ice_gathering_state_change)
     try:
+        if pc.iceGatheringState == "complete":
+            return
         await asyncio.wait_for(completed.wait(), timeout=timeout_seconds)
     except asyncio.TimeoutError as exc:
         raise TimeoutError(
             f"Server ICE gathering did not complete within {timeout_seconds:.0f} seconds."
         ) from exc
+    finally:
+        try:
+            pc.remove_listener("icegatheringstatechange", on_ice_gathering_state_change)
+        except Exception:
+            logger.debug("Could not remove ICE gathering listener", exc_info=True)
 
 
 def _resample(
