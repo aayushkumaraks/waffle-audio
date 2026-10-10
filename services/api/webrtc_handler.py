@@ -65,26 +65,44 @@ def _configure_aioice_port_range() -> None:
 
     async def create_datagram_endpoint(protocol_factory, *args, **kwargs):
         local_addr = kwargs.get("local_addr")
+        positional_local = local_addr is None and bool(args)
+        if positional_local:
+            local_addr = args[0]
+
         if local_addr and len(local_addr) >= 2 and local_addr[1] == 0:
-            host = local_addr[0]
-            last_error = None
-            width = maximum - minimum + 1
-            start = int.from_bytes(os.urandom(4), "big") % width
-            for offset in range(width):
-                port = minimum + ((start + offset) % width)
-                kwargs_with_port = dict(kwargs)
-                kwargs_with_port["local_addr"] = (host, port, *local_addr[2:])
-                try:
-                    return await original(protocol_factory, *args, **kwargs_with_port)
-                except OSError as exc:
-                    last_error = exc
-            raise OSError(
-                f"No free UDP ports in configured WebRTC range {minimum}-{maximum}."
-            ) from last_error
+            return await _create_bound_endpoint(
+                original, protocol_factory, args, kwargs, local_addr, minimum, maximum,
+                positional_local,
+            )
         return await original(protocol_factory, *args, **kwargs)
 
-    loop.create_datagram_endpoint = create_datagram_endpoint
 
+async def _create_bound_endpoint(
+    original, protocol_factory, args, kwargs, local_addr, minimum, maximum, positional_local
+):
+    """Bind to an available port in the configured inclusive range."""
+    last_error = None
+    host = local_addr[0]
+    width = maximum - minimum + 1
+    start = int.from_bytes(os.urandom(4), "big") % width
+
+    for offset in range(width):
+        port = minimum + ((start + offset) % width)
+        address = (host, port, *local_addr[2:])
+        args_with_port = list(args)
+        kwargs_with_port = dict(kwargs)
+        if positional_local:
+            args_with_port[0] = address
+        else:
+            kwargs_with_port["local_addr"] = address
+        try:
+            return await original(protocol_factory, *args_with_port, **kwargs_with_port)
+        except OSError as exc:
+            last_error = exc
+
+    raise OSError(
+        f"No free UDP ports in configured WebRTC range {minimum}-{maximum}."
+    ) from last_error
 
 def _rewrite_advertised_candidates(sdp_text: str) -> str:
     """Optionally advertise a host-reachable IP while retaining UDP ports."""
