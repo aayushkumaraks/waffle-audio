@@ -58,9 +58,9 @@ def _configure_aioice_port_range() -> None:
 
     async def create_datagram_endpoint(protocol_factory, *args, **kwargs):
         local_addr = kwargs.get("local_addr")
-        positional_local = local_addr is None and bool(args)
+        positional_local = local_addr is None and len(args) >= 2
         if positional_local:
-            local_addr = args[0]
+            local_addr = args[1]
 
         if local_addr and len(local_addr) >= 2 and local_addr[1] == 0:
             return await _create_bound_endpoint(
@@ -87,7 +87,7 @@ async def _create_bound_endpoint(
         args_with_port = list(args)
         kwargs_with_port = dict(kwargs)
         if positional_local:
-            args_with_port[0] = address
+            args_with_port[1] = address
         else:
             kwargs_with_port["local_addr"] = address
         try:
