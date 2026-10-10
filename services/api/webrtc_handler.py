@@ -87,29 +87,22 @@ def _configure_aioice_port_range() -> None:
     loop.create_datagram_endpoint = create_datagram_endpoint
 
 def _rewrite_advertised_candidates(sdp_text: str) -> str:
-    """Optionally advertise a host-reachable IP while retaining bound UDP ports."""
+    """Optionally advertise a host-reachable IP while retaining UDP ports."""
     advertised_ip = os.getenv("VOICECHAT_WEBRTC_ADVERTISED_IP", "").strip()
     if not advertised_ip:
         return sdp_text
 
-    # ICE candidate addresses are space-delimited SDP fields. Only rewrite the
-    # address field in candidate lines and the related-address field for srflx.
+    # The IP field is field 5 (index 4) in candidate attribute lines.
+    # Only rewrite host candidates; keep any server-reflexive address as gathered.
     rewritten = []
     for line in sdp_text.splitlines():
         if line.startswith("a=candidate:"):
             fields = line.split()
-            if len(fields) >= 8 and fields[7] in ("host", "srflx"):
-                # Host candidates are safe to rewrite. A srflx candidate's
-                # related address is also a private host address.
+            if len(fields) >= 8 and fields[7] == "host":
                 fields[4] = advertised_ip
-                if "raddr" in fields:
-                    related_index = fields.index("raddr") + 1
-                    if related_index < len(fields):
-                        fields[related_index] = advertised_ip
                 line = " ".join(fields)
         rewritten.append(line)
     return "\r\n".join(rewritten) + "\r\n"
-
 
 def _ice_servers() -> list[RTCIceServer]:
     """Load ICE servers from JSON or a comma-separated URL list.
