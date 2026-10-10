@@ -59,11 +59,25 @@ def _configure_aioice_port_range() -> None:
     async def create_datagram_endpoint(protocol_factory, *args, **kwargs):
         local_addr = kwargs.get("local_addr")
         if local_addr and len(local_addr) >= 2 and local_addr[1] == 0:
-            return await _create_bound_endpoint(
-                original, protocol_factory, args, kwargs, local_addr,
-                minimum, maximum,
-            )
+            host = local_addr[0]
+            last_error = None
+            width = maximum - minimum + 1
+            start = int.from_bytes(os.urandom(4), "big") % width
+            for offset in range(width):
+                port = minimum + ((start + offset) % width)
+                endpoint_kwargs = dict(kwargs)
+                endpoint_kwargs["local_addr"] = (host, port, *local_addr[2:])
+                try:
+                    return await original(protocol_factory, *args, **endpoint_kwargs)
+                except OSError as exc:
+                    last_error = exc
+            raise OSError(
+                f"No free UDP ports in configured WebRTC range {minimum}-{maximum}."
+            ) from last_error
         return await original(protocol_factory, *args, **kwargs)
+
+    loop.create_datagram_endpoint = create_datagram_endpoint
+
 
 def _rewrite_advertised_candidates(sdp_text: str) -> str:
     """Optionally advertise a host-reachable IP while retaining UDP ports."""
