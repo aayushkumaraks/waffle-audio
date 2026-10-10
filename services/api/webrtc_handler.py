@@ -8,6 +8,7 @@ Flow: browser mic → audio preprocessing/VAD → STTService
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from typing import Optional
@@ -40,17 +41,37 @@ _peer_connections: set[RTCPeerConnection] = set()
 
 
 def _ice_servers() -> list[RTCIceServer]:
-    """Load STUN/TURN URLs from the environment for local and deployed setups.
+    """Load ICE servers from JSON or a comma-separated URL list.
 
-    VOICECHAT_ICE_SERVERS accepts comma-separated ICE server URLs, including
-    optional TURN URLs when deployment requires relay candidates.
+    JSON accepts standard RTCIceServer fields (urls, username, credential),
+    allowing authenticated TURN relays. Keep credentials in the environment,
+    never in source control. URL-list mode remains convenient for STUN-only use.
     """
-    urls = [
-        value.strip()
-        for value in os.getenv("VOICECHAT_ICE_SERVERS", _DEFAULT_STUN_SERVERS).split(",")
-        if value.strip()
-    ]
-    return [RTCIceServer(urls=url) for url in urls]
+    configured = os.getenv("VOICECHAT_ICE_SERVERS", _DEFAULT_STUN_SERVERS).strip()
+    if not configured:
+        return []
+
+    try:
+        parsed = json.loads(configured)
+    except json.JSONDecodeError:
+        urls = [value.strip() for value in configured.split(",") if value.strip()]
+        return [RTCIceServer(urls=url) for url in urls]
+
+    if not isinstance(parsed, list):
+        raise ValueError("VOICECHAT_ICE_SERVERS JSON must be an array of ICE server objects.")
+
+    servers: list[RTCIceServer] = []
+    for item in parsed:
+        if not isinstance(item, dict) or "urls" not in item:
+            raise ValueError("Each VOICECHAT_ICE_SERVERS entry must be an object with 'urls'.")
+        servers.append(
+            RTCIceServer(
+                urls=item["urls"],
+                username=item.get("username"),
+                credential=item.get("credential"),
+            )
+        )
+    return servers
 
 
 async def _wait_for_ice_gathering(
@@ -67,8 +88,6 @@ async def _wait_for_ice_gathering(
         if pc.iceGatheringState == "complete":
             completed.set()
 
-    # aiortc's pyee handlers can be synchronous. Registering synchronously and
-    # using a regular callback avoids waiting for a coroutine event dispatch.
     pc.on("icegatheringstatechange", on_ice_gathering_state_change)
     try:
         if pc.iceGatheringState == "complete":
@@ -189,7 +208,6 @@ async def _receive_browser_audio(
             except AudioQueueFull:
                 pass
     finally:
-        # Ensure the next browser session starts from a clean VAD state.
         vad.reset()
 
 
@@ -230,7 +248,7 @@ async def create_answer(
         local = pc.localDescription
         if local is None or "a=candidate:" not in local.sdp:
             raise RuntimeError(
-                "Server gathered no ICE candidates. Check the network/firewall and "
+                "Server gathered no ICE candidates. Check network/firewall and "
                 "VOICECHAT_ICE_SERVERS configuration."
             )
 
