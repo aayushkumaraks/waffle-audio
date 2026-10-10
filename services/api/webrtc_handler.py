@@ -64,7 +64,7 @@ def _configure_aioice_port_range() -> None:
         if local_addr and len(local_addr) >= 2 and local_addr[1] == 0:
             return await _create_bound_endpoint(
                 original, protocol_factory, args, kwargs, local_addr,
-                minimum, maximum, False,
+                minimum, maximum,
             )
         return await original(protocol_factory, *args, **kwargs)
 
@@ -72,7 +72,7 @@ def _configure_aioice_port_range() -> None:
 
 
 async def _create_bound_endpoint(
-    original, protocol_factory, args, kwargs, local_addr, minimum, maximum, positional_local
+    original, protocol_factory, args, kwargs, local_addr, minimum, maximum
 ):
     """Bind to an available port in the configured inclusive range."""
     last_error = None
@@ -83,12 +83,8 @@ async def _create_bound_endpoint(
     for offset in range(width):
         port = minimum + ((start + offset) % width)
         address = (host, port, *local_addr[2:])
-        args_with_port = list(args)
         kwargs_with_port = dict(kwargs)
-        if positional_local:
-            args_with_port[0] = address
-        else:
-            kwargs_with_port["local_addr"] = address
+        kwargs_with_port["local_addr"] = address
         try:
             return await original(protocol_factory, *args_with_port, **kwargs_with_port)
         except OSError as exc:
