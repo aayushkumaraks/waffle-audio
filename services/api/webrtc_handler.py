@@ -43,21 +43,14 @@ _peer_connections: set[RTCPeerConnection] = set()
 
 
 def _configure_aioice_port_range() -> None:
-    """Constrain aioice host UDP sockets to the published container port range.
-
-    aioice does not currently expose a public port-range setting. At runtime,
-    wrap this event loop's datagram endpoint factory and retry ephemeral binds
-    on ports within the configured range. The wrapper only affects endpoints
-    requested with local port zero, which is how aioice allocates ICE sockets.
-    """
+    """Configure aioice to bind its dynamic UDP sockets to the published port range."""
     minimum = int(os.getenv("VOICECHAT_WEBRTC_UDP_PORT_MIN", _DEFAULT_ICE_PORT_MIN))
     maximum = int(os.getenv("VOICECHAT_WEBRTC_UDP_PORT_MAX", _DEFAULT_ICE_PORT_MAX))
     if not (1 <= minimum <= maximum <= 65535):
         raise ValueError("VOICECHAT_WEBRTC_UDP_PORT_MIN/MAX must describe a valid UDP port range.")
 
     loop = asyncio.get_running_loop()
-    original = getattr(loop, "_waffle_original_create_datagram_endpoint", None)
-    if original is not None:
+    if getattr(loop, "_waffle_original_create_datagram_endpoint", None) is not None:
         return
 
     original = loop.create_datagram_endpoint
@@ -71,10 +64,12 @@ def _configure_aioice_port_range() -> None:
 
         if local_addr and len(local_addr) >= 2 and local_addr[1] == 0:
             return await _create_bound_endpoint(
-                original, protocol_factory, args, kwargs, local_addr, minimum, maximum,
-                positional_local,
+                original, protocol_factory, args, kwargs, local_addr,
+                minimum, maximum, positional_local,
             )
         return await original(protocol_factory, *args, **kwargs)
+
+    loop.create_datagram_endpoint = create_datagram_endpoint
 
 
 async def _create_bound_endpoint(
@@ -103,6 +98,7 @@ async def _create_bound_endpoint(
     raise OSError(
         f"No free UDP ports in configured WebRTC range {minimum}-{maximum}."
     ) from last_error
+
 
 def _rewrite_advertised_candidates(sdp_text: str) -> str:
     """Optionally advertise a host-reachable IP while retaining UDP ports."""
