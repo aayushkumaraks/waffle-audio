@@ -44,11 +44,12 @@ _peer_connections: set[RTCPeerConnection] = set()
 
 
 def _configure_aioice_port_range() -> None:
-    """Constrain aioice's dynamically allocated UDP sockets when configured.
+    """Constrain aioice host UDP sockets to the published container port range.
 
-    aioice does not expose a public port-range option. Its candidate allocator
-    binds to port zero; wrapping only the loop's datagram endpoint creation keeps
-    allocation inside the configured range without rewriting candidate ports.
+    aioice does not currently expose a public port-range setting. At runtime,
+    wrap this event loop's datagram endpoint factory and retry ephemeral binds
+    on ports within the configured range. The wrapper only affects endpoints
+    requested with local port zero, which is how aioice allocates ICE sockets.
     """
     minimum = int(os.getenv("VOICECHAT_WEBRTC_UDP_PORT_MIN", _DEFAULT_ICE_PORT_MIN))
     maximum = int(os.getenv("VOICECHAT_WEBRTC_UDP_PORT_MAX", _DEFAULT_ICE_PORT_MAX))
@@ -68,10 +69,10 @@ def _configure_aioice_port_range() -> None:
         if local_addr and len(local_addr) >= 2 and local_addr[1] == 0:
             host = local_addr[0]
             last_error = None
-            # Try each permitted port in ascending order; this is predictable in tests.
             width = maximum - minimum + 1
+            start = int.from_bytes(os.urandom(4), "big") % width
             for offset in range(width):
-                port = minimum + offset
+                port = minimum + ((start + offset) % width)
                 kwargs_with_port = dict(kwargs)
                 kwargs_with_port["local_addr"] = (host, port, *local_addr[2:])
                 try:
@@ -84,7 +85,6 @@ def _configure_aioice_port_range() -> None:
         return await original(protocol_factory, *args, **kwargs)
 
     loop.create_datagram_endpoint = create_datagram_endpoint
-
 
 def _rewrite_advertised_candidates(sdp_text: str) -> str:
     """Optionally advertise a host-reachable IP while retaining bound UDP ports."""
