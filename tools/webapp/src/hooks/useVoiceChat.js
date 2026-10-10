@@ -9,7 +9,7 @@ const MAX_RECORDING_MS = 60000
 const LIVE_POLL_MS = 700
 const ICE_GATHERING_TIMEOUT_MS = 15000
 const API_STORAGE_KEY = 'waffle.apiUrl'
-const DEFAULT_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }]
+const DEFAULT_ICE_SERVERS = []
 
 function defaultApiUrl() {
   const configured = import.meta.env.VITE_API_URL
