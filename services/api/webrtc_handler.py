@@ -86,7 +86,7 @@ async def _create_bound_endpoint(
         kwargs_with_port = dict(kwargs)
         kwargs_with_port["local_addr"] = address
         try:
-            return await original(protocol_factory, *args_with_port, **kwargs_with_port)
+            return await original(protocol_factory, *args, **kwargs_with_port)
         except OSError as exc:
             last_error = exc
 
