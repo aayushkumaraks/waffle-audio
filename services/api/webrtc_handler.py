@@ -12,7 +12,6 @@ import json
 import logging
 import os
 import random
-import socket
 from typing import Optional
 
 import av
