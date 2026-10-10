@@ -7,7 +7,9 @@ const SILENCE_SECONDS = 1.2
 const STT_TIMEOUT_MS = 15000
 const MAX_RECORDING_MS = 60000
 const LIVE_POLL_MS = 700
+const ICE_GATHERING_TIMEOUT_MS = 15000
 const API_STORAGE_KEY = 'waffle.apiUrl'
+const DEFAULT_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }]
 
 function defaultApiUrl() {
   const configured = import.meta.env.VITE_API_URL
@@ -30,6 +32,52 @@ function getRecorderMimeType() {
     'audio/webm',
     'audio/mp4',
   ].find(type => MediaRecorder.isTypeSupported(type)) || ''
+}
+
+function getIceServers() {
+  const configured = import.meta.env.VITE_ICE_SERVERS
+  if (!configured?.trim()) return DEFAULT_ICE_SERVERS
+
+  try {
+    const parsed = JSON.parse(configured)
+    if (Array.isArray(parsed) && parsed.length) return parsed
+  } catch {
+    // Support a comma-separated list of STUN/TURN URLs as a convenient fallback.
+    const urls = configured.split(',').map(value => value.trim()).filter(Boolean)
+    if (urls.length) return urls.map(url => ({ urls: url }))
+  }
+  return DEFAULT_ICE_SERVERS
+}
+
+function waitForIceGathering(peer, timeoutMs = ICE_GATHERING_TIMEOUT_MS) {
+  if (peer.iceGatheringState === 'complete') return Promise.resolve()
+
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      cleanup()
+      reject(new Error(`Timed out gathering browser ICE candidates (state: ${peer.iceGatheringState}).`))
+    }, timeoutMs)
+
+    const onStateChange = () => {
+      if (peer.iceGatheringState === 'complete') {
+        cleanup()
+        resolve()
+      }
+    }
+
+    const cleanup = () => {
+      window.clearTimeout(timeout)
+      peer.removeEventListener('icegatheringstatechange', onStateChange)
+    }
+
+    peer.addEventListener('icegatheringstatechange', onStateChange)
+    // Close the race where gathering completed as the listener was attached.
+    onStateChange()
+  })
+}
+
+function countIceCandidates(sdp = '') {
+  return (sdp.match(/^a=candidate:/gm) || []).length
 }
 
 export function useVoiceChat() {
@@ -389,9 +437,7 @@ export function useVoiceChat() {
       })
       localStreamRef.current = stream
 
-      peer = new RTCPeerConnection({
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
-      })
+      peer = new RTCPeerConnection({ iceServers: getIceServers() })
       peerRef.current = peer
 
       stream.getAudioTracks().forEach(track => peer.addTrack(track, stream))
@@ -402,8 +448,25 @@ export function useVoiceChat() {
         }
       }
 
+      peer.oniceconnectionstatechange = () => {
+        console.info('[WebRTC] ICE connection state:', peer.iceConnectionState)
+        if (peer.iceConnectionState === 'failed') {
+          const stats = peer.getStats().then(report => {
+            const pairs = []
+            report.forEach(item => {
+              if (item.type === 'candidate-pair' && item.state === 'failed') {
+                pairs.push(`${item.localCandidateId} ↔ ${item.remoteCandidateId}`)
+              }
+            })
+            console.error('[WebRTC] Failed candidate pairs:', pairs)
+          }).catch(() => {})
+          void stats
+        }
+      }
+
       peer.onconnectionstatechange = () => {
         if (!mountedRef.current) return
+        console.info('[WebRTC] Peer connection state:', peer.connectionState)
         if (peer.connectionState === 'connected') {
           setIsLive(true)
           busyRef.current = false
@@ -412,58 +475,44 @@ export function useVoiceChat() {
           knownHistoryRef.current = 0
           window.clearInterval(pollRef.current)
           pollRef.current = window.setInterval(pollLive, LIVE_POLL_MS)
-        } else if (['failed', 'disconnected', 'closed'].includes(peer.connectionState)) {
+        } else if (peer.connectionState === 'failed') {
+          addMessage('error', 'WebRTC ICE negotiation failed. The browser could not reach the server media candidate. If the API is running in WSL2, host-network candidates may be unreachable from Windows; configure a reachable server address or TURN relay via VITE_ICE_SERVERS and VOICECHAT_ICE_SERVERS. See the browser console for ICE state diagnostics.')
+          disconnectLive()
+        } else if (peer.connectionState === 'disconnected' || peer.connectionState === 'closed') {
           disconnectLive()
         }
       }
 
       const offer = await peer.createOffer()
       await peer.setLocalDescription(offer)
-      await new Promise((resolve, reject) => {
-        if (peer.iceGatheringState === 'complete') {
-          resolve()
-          return
-        }
-        const timeout = window.setTimeout(() => {
-          cleanup()
-          reject(new Error('Timed out gathering ICE candidates.'))
-        }, 10000)
-        const onStateChange = () => {
-          if (peer.iceGatheringState === 'complete') {
-            cleanup()
-            resolve()
-          }
-        }
-        const cleanup = () => {
-          window.clearTimeout(timeout)
-          peer.removeEventListener('icegatheringstatechange', onStateChange)
-        }
-        peer.addEventListener('icegatheringstatechange', onStateChange)
-      })
+      await waitForIceGathering(peer)
+
+      const offerSdp = peer.localDescription?.sdp || ''
+      const browserCandidateCount = countIceCandidates(offerSdp)
+      console.info('[WebRTC] Browser ICE candidates gathered:', browserCandidateCount)
+      if (!browserCandidateCount) {
+        throw new Error('The browser gathered no ICE candidates. Check browser network permissions and ICE server configuration.')
+      }
 
       const response = await fetch(api.root() + '/webrtc/offer', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({
-          sdp: peer.localDescription?.sdp,
-          type: peer.localDescription?.type,
-        }),
+        body: JSON.stringify({ sdp: offerSdp, type: peer.localDescription?.type }),
       })
       if (!response.ok) {
         const data = await response.json().catch(() => ({}))
         throw new Error(data.detail || response.statusText || 'WebRTC negotiation failed.')
       }
 
-      await peer.setRemoteDescription(await response.json())
-      if (peer.connectionState === 'connected') {
-        setIsLive(true)
-        busyRef.current = false
-        setStatusLabel('Live conversation')
-        setStatusState('live')
-        knownHistoryRef.current = 0
-        window.clearInterval(pollRef.current)
-        pollRef.current = window.setInterval(pollLive, LIVE_POLL_MS)
+      const answer = await response.json()
+      const serverCandidateCount = countIceCandidates(answer.sdp)
+      console.info('[WebRTC] Server ICE candidates returned:', serverCandidateCount)
+      if (!serverCandidateCount) {
+        throw new Error('The server returned no ICE candidates. Check server logs, firewall/NAT settings, and VOICECHAT_ICE_SERVERS.')
       }
+
+      await peer.setRemoteDescription(answer)
+      // Connection-state events will activate polling when ICE/DTLS succeeds.
     } catch (error) {
       peer?.close()
       localStreamRef.current?.getTracks().forEach(track => track.stop())
@@ -518,4 +567,3 @@ export function useVoiceChat() {
     clearConversation,
   }
 }
-
