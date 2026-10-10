@@ -103,7 +103,7 @@ The API and browser UI share one FastAPI process. The CLI is a separate entry po
 
 ### WebRTC in Docker
 
-The API uses a bounded UDP port range for aiortc media sockets, and Compose publishes the same range. If the browser cannot reach the container-advertised IP, set `VOICECHAT_WEBRTC_ADVERTISED_IP` in `.env` to the host IP reachable from that browser (for example, the Windows host LAN IP when browsing from Firefox on Windows). The TCP API mapping does not carry WebRTC media. Open the configured UDP range in the host firewall as well. Do not set the advertised IP to the container bridge IP. This configuration avoids requiring a third-party TURN relay for a browser and container on the same host/network, but cannot guarantee reachability across restrictive NATs or firewalls.
+The API uses a bounded UDP port range for aiortc media sockets, and Compose publishes the same range. WebRTC defaults to host ICE candidates only and does not contact third-party STUN/TURN services; you can opt in by setting `VOICECHAT_ICE_SERVERS` if needed. If the browser cannot reach the container-advertised IP, set `VOICECHAT_WEBRTC_ADVERTISED_IP` in `.env` to the host IP reachable from that browser (for example, the Windows host LAN IP when browsing from Firefox on Windows). The TCP API mapping does not carry WebRTC media. Open the configured UDP range in the host firewall as well. Do not set the advertised IP to the container bridge IP. This configuration is intended for a browser and container on the same host/network, but cannot guarantee reachability across restrictive NATs or firewalls.
 
 ## Development
 
