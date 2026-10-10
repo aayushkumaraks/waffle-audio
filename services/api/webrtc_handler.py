@@ -8,13 +8,21 @@ Flow: browser mic → audio preprocessing/VAD → STTService
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 from typing import Optional
 
 import av
 import numpy as np
 import numpy.typing as npt
-from aiortc import MediaStreamTrack, RTCPeerConnection, RTCSessionDescription
+from aiortc import (
+    MediaStreamTrack,
+    RTCConfiguration,
+    RTCIceServer,
+    RTCPeerConnection,
+    RTCSessionDescription,
+)
 from aiortc.mediastreams import AudioStreamTrack
 
 from services.audio_processing.src import VADService
@@ -26,8 +34,74 @@ logger = logging.getLogger(__name__)
 _WEBRTC_RATE = 48_000
 _FRAME_SAMPLES = 960
 _STT_RATE = 16_000
+_ICE_GATHERING_TIMEOUT_SECONDS = 10.0
+_DEFAULT_STUN_SERVERS = "stun:stun.l.google.com:19302"
 
 _peer_connections: set[RTCPeerConnection] = set()
+
+
+def _ice_servers() -> list[RTCIceServer]:
+    """Load ICE servers from JSON or a comma-separated URL list.
+
+    JSON accepts standard RTCIceServer fields (urls, username, credential),
+    allowing authenticated TURN relays. Keep credentials in the environment,
+    never in source control. URL-list mode remains convenient for STUN-only use.
+    """
+    configured = os.getenv("VOICECHAT_ICE_SERVERS", _DEFAULT_STUN_SERVERS).strip()
+    if not configured:
+        return []
+
+    try:
+        parsed = json.loads(configured)
+    except json.JSONDecodeError:
+        urls = [value.strip() for value in configured.split(",") if value.strip()]
+        return [RTCIceServer(urls=url) for url in urls]
+
+    if not isinstance(parsed, list):
+        raise ValueError("VOICECHAT_ICE_SERVERS JSON must be an array of ICE server objects.")
+
+    servers: list[RTCIceServer] = []
+    for item in parsed:
+        if not isinstance(item, dict) or "urls" not in item:
+            raise ValueError("Each VOICECHAT_ICE_SERVERS entry must be an object with 'urls'.")
+        servers.append(
+            RTCIceServer(
+                urls=item["urls"],
+                username=item.get("username"),
+                credential=item.get("credential"),
+            )
+        )
+    return servers
+
+
+async def _wait_for_ice_gathering(
+    pc: RTCPeerConnection,
+    timeout_seconds: float = _ICE_GATHERING_TIMEOUT_SECONDS,
+) -> None:
+    """Wait for candidates to be embedded in the local SDP (non-trickle ICE)."""
+    if pc.iceGatheringState == "complete":
+        return
+
+    completed = asyncio.Event()
+
+    def on_ice_gathering_state_change() -> None:
+        if pc.iceGatheringState == "complete":
+            completed.set()
+
+    pc.on("icegatheringstatechange", on_ice_gathering_state_change)
+    try:
+        if pc.iceGatheringState == "complete":
+            return
+        await asyncio.wait_for(completed.wait(), timeout=timeout_seconds)
+    except asyncio.TimeoutError as exc:
+        raise TimeoutError(
+            f"Server ICE gathering did not complete within {timeout_seconds:.0f} seconds."
+        ) from exc
+    finally:
+        try:
+            pc.remove_listener("icegatheringstatechange", on_ice_gathering_state_change)
+        except Exception:
+            logger.debug("Could not remove ICE gathering listener", exc_info=True)
 
 
 def _resample(
@@ -134,7 +208,6 @@ async def _receive_browser_audio(
             except AudioQueueFull:
                 pass
     finally:
-        # Ensure the next browser session starts from a clean VAD state.
         vad.reset()
 
 
@@ -145,9 +218,9 @@ async def create_answer(
     stt: STTService,
     vad: VADService,
 ) -> dict[str, str]:
-    """Accept a WebRTC offer and return the SDP answer."""
-    loop = asyncio.get_event_loop()
-    pc = RTCPeerConnection()
+    """Accept a browser offer and return an SDP answer with gathered ICE candidates."""
+    loop = asyncio.get_running_loop()
+    pc = RTCPeerConnection(RTCConfiguration(iceServers=_ice_servers()))
     _peer_connections.add(pc)
 
     tts_track = TTSOutputTrack(loop=loop)
@@ -166,16 +239,31 @@ async def create_answer(
             tts.remove_listener(tts_track)
             _peer_connections.discard(pc)
 
-    await pc.setRemoteDescription(
-        RTCSessionDescription(sdp=sdp, type=sdp_type)
-    )
-    answer = await pc.createAnswer()
-    await pc.setLocalDescription(answer)
+    try:
+        await pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type=sdp_type))
+        answer = await pc.createAnswer()
+        await pc.setLocalDescription(answer)
+        await _wait_for_ice_gathering(pc)
 
-    return {
-        "sdp": pc.localDescription.sdp,
-        "type": pc.localDescription.type,
-    }
+        local = pc.localDescription
+        if local is None or "a=candidate:" not in local.sdp:
+            raise RuntimeError(
+                "Server gathered no ICE candidates. Check network/firewall and "
+                "VOICECHAT_ICE_SERVERS configuration."
+            )
+
+        logger.info(
+            "Returning WebRTC answer (ICE state=%s, candidate lines=%d)",
+            pc.iceGatheringState,
+            sum(line.startswith("a=candidate:") for line in local.sdp.splitlines()),
+        )
+        return {"sdp": local.sdp, "type": local.type}
+    except Exception:
+        tts.remove_listener(tts_track)
+        _peer_connections.discard(pc)
+        await pc.close()
+        logger.exception("Failed to negotiate WebRTC offer/answer.")
+        raise
 
 
 async def close_all() -> None:
