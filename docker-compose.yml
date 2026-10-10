@@ -1,0 +1,56 @@
+services:
+  waffle-audio:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: waffle-audio:local
+    container_name: waffle-audio
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${VOICECHAT_API_PORT:-3000}:3000"
+    environment:
+      VOICECHAT_API_HOST: 0.0.0.0
+      VOICECHAT_API_PORT: 3000
+      VOICECHAT_TTS_BACKEND: ${VOICECHAT_TTS_BACKEND:-pocket}
+      VOICECHAT_TTS_VOICE: ${VOICECHAT_TTS_VOICE:-alba}
+      VOICECHAT_POCKET_TTS_CACHE_DIR: /app/voiceModels/pocket-tts-cache
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:4b}
+      VOICECHAT_CORS_ALLOW_ORIGINS: ${VOICECHAT_CORS_ALLOW_ORIGINS:-*}
+    volumes:
+      - pocket-tts-cache:/app/voiceModels/pocket-tts-cache
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    profiles: ["web"]
+
+  waffle-audio-cli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: waffle-audio:local
+    container_name: waffle-audio-cli
+    stdin_open: true
+    tty: true
+    init: true
+    environment:
+      VOICECHAT_TTS_BACKEND: ${VOICECHAT_TTS_BACKEND:-pocket}
+      VOICECHAT_TTS_VOICE: ${VOICECHAT_TTS_VOICE:-alba}
+      VOICECHAT_POCKET_TTS_CACHE_DIR: /app/voiceModels/pocket-tts-cache
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:4b}
+    volumes:
+      - pocket-tts-cache:/app/voiceModels/pocket-tts-cache
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: ["uv", "run", "--frozen", "--no-sync", "python", "-m", "services.conversation.app"]
+    profiles: ["cli"]
+
+volumes:
+  pocket-tts-cache:

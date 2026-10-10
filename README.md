@@ -1,91 +1,108 @@
-# Waffle-Audio
+# Waffle Audio
 
-A real-time, voice-to-voice AI assistant that runs entirely on your local machine.
+A local voice assistant with two run modes: a microphone-driven CLI using `ConversationManager`, or a browser UI served by the FastAPI API. Docker provides a consistent Python/system runtime across macOS, Windows, and Linux.
 
-You speak into a microphone. The assistant transcribes what you say, generates a reply
-using a locally hosted language model, and speaks the reply back through your speakers.
+## Quick install
 
-## How it works
+Install [Docker Desktop](https://docs.docker.com/get-docker/) (or Docker Engine plus Compose v2 on Linux) and Git. Then:
 
-```
-Microphone --> VAD (Silero) --> STT (Moonshine) --> LLM (Ollama) --> TTS (Kokoro / Pocket TTS) --> Speakers
-```
-
-| Stage | Technology         | Notes                                      |
-|-------|--------------------|--------------------------------------------|
-| STT   | Moonshine          | Streaming speech-to-text, runs on CPU/GPU  |
-| LLM   | Ollama (local)     | Default model: qwen3.5:4b                  |
-| TTS   | Kokoro / Pocket TTS | Selectable streaming neural text-to-speech |
-| Audio | sounddevice / PortAudio | Cross-platform audio I/O              |
-
-## Key features
-
-- Echo cancellation: microphone input is muted while the assistant is speaking
-- Adaptive sentence gate: fragments the user speaks across short pauses are
-  accumulated before the LLM call, avoiding premature or duplicate responses
-- Conversation history: every turn is tracked and printed on exit
-- Voice-friendly LLM prompt: the model is instructed to reply in 1-2 plain
-  sentences with no emojis or markdown
-
-## Project structure
-
-```
-services/
-  conversation/   Orchestrates STT -> LLM -> TTS
-    src/
-      manager.py          ConversationManager
-      sentence_gate.py    Adaptive silence-gap gate
-  stt/            Moonshine streaming transcription wrapper
-  llm/            Ollama HTTP provider + queue-based service
-  tts/            Feature-flagged Kokoro and Pocket TTS services
-  audio/          Blocking audio playback worker
-models/           Shared data models (Message)
-voiceModels/      Kokoro ONNX model files (not committed)
-pyproject.toml    Dependencies managed by uv
-```
-
-## Quick start
-
-See [SETUP.md](SETUP.md) for first-time installation and [RUN.md](RUN.md) to start the
-app.
-
-## HTTP API
-
-All services are exposed on one HTTP server process.
-
-- Default port: `3000`
-- Configurable via environment variable: `VOICECHAT_API_PORT`
-- Host configurable via: `VOICECHAT_API_HOST`
-
-Start the API server:
+**macOS / Linux**
 
 ```bash
-uv run python -m services.api.app
+curl -fsSL https://raw.githubusercontent.com/aayushkumaraks/waffle-audio/main/scripts/install.sh -o install-waffle-audio.sh
+bash install-waffle-audio.sh
 ```
 
-Set `VOICECHAT_TTS_BACKEND=pocket` to use Pocket TTS. Omitting it (or setting
-`kokoro`) retains the existing Kokoro backend.
+**Windows PowerShell**
 
-Then open:
+```powershell
+irm https://raw.githubusercontent.com/aayushkumaraks/waffle-audio/main/scripts/install.ps1 -OutFile install-waffle-audio.ps1
+powershell -ExecutionPolicy Bypass -File .\install-waffle-audio.ps1
+```
+
+The installer asks which Pocket TTS voice to use, saves it to `.env`, then offers to run now or start the web/API container in the background. Python packages and system dependencies are installed inside the Docker image; Python and `uv` are not required on the host.
+
+## Choose a run mode
+
+Run `scripts/run.sh` (macOS/Linux) or `scripts/run.ps1` (Windows PowerShell). The menu offers:
+
+1. **CLI voice assistant** — uses the existing `ConversationManager` path, prints only recognized user speech and assistant replies, and suppresses routine service logs.
+2. **Web UI + API** — builds and starts the API container, which serves the UI and docs.
+
+Web mode URLs:
+
+- UI: `http://localhost:3000/ui`
+- API docs: `http://localhost:3000/docs`
+- Health: `http://localhost:3000/health`
+
+Override the host port with `VOICECHAT_API_PORT` (for example, `VOICECHAT_API_PORT=3100`).
+
+## CLI audio notes
+
+Docker makes the application runtime cross-platform, but microphone/speaker passthrough is controlled by the host OS and Docker implementation. Native Docker Desktop on macOS/Windows does not expose host audio devices to Linux containers in a portable way. Use **web mode** on those platforms; browser audio is captured by the browser and sent to the API. The CLI container is best-effort on Linux hosts with audio devices exposed to the container; for ALSA, configure device access for your system (often `/dev/snd`) before using CLI mode.
+
+## Dependencies and LLM
+
+- Docker Engine/Desktop with Docker Compose v2
+- Git for the initial checkout
+- [Ollama](https://ollama.com) running on the host with `qwen3.5:4b` pulled:
+
+```bash
+ollama pull qwen3.5:4b
+```
+
+Ollama stays on the host because it manages the local LLM and its model cache. The container reaches it at `host.docker.internal:11434` (the Compose file adds the host-gateway mapping for Linux). Override `OLLAMA_BASE_URL` and `OLLAMA_MODEL` in `.env` if needed. On Linux, configure Ollama to listen on an address reachable from Docker, not only loopback.
+
+## Container commands
+
+```bash
+# Web + API (background)
+docker compose --profile web up --build -d
+
+# Follow logs
+docker compose logs -f waffle-audio
+
+# Stop containers
+docker compose --profile web down
+
+# Run CLI interactively
+docker compose --profile cli run --rm waffle-audio-cli
+
+# Rebuild after code changes
+docker compose build --no-cache
+```
+
+The Pocket TTS cache is stored in a named Docker volume so the model/voice downloads persist between runs. The web service uses `restart: unless-stopped`. `scripts/create-service.sh` / `.ps1` starts that background service; stopping it is `docker compose --profile web down`.
+
+## Configuration
+
+Copy/edit `.env` as needed. Common variables:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VOICECHAT_TTS_BACKEND` | `pocket` | TTS backend; existing Kokoro code remains available |
+| `VOICECHAT_TTS_VOICE` | `alba` | Pocket TTS voice identifier |
+| `VOICECHAT_API_PORT` | `3000` | Published host port |
+| `VOICECHAT_CORS_ALLOW_ORIGINS` | `*` | Browser origin allowlist |
+| `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` in Compose | Host Ollama endpoint |
+| `OLLAMA_MODEL` | `qwen3.5:4b` | Local model name |
+
+Voice options include English `alba`, `anna`, `azelma`, `bill_boerst`, `caro_davy`, `charles`, `cosette`, `eponine`, `eve`, `fantine`, `george`, `jane`, `jean`, `javert`, `marius`, `mary`, `michael`, `paul`, `peter_yearsley`, `stuart_bell`, `vera`; French `estelle`; German `juergen`; Italian `giovanni`; Portuguese `rafael`; Spanish `lola`. Catalog and license information: [Pocket TTS voices](https://huggingface.co/kyutai/tts-voices).
+
+## Architecture
 
 ```text
-http://localhost:3000/docs
+Browser microphone → WebRTC/VAD → STT (Moonshine) → LLM (Ollama) → TTS (Pocket TTS) → Browser speakers
+CLI microphone → STT (Moonshine) → ConversationManager → Ollama → Pocket TTS → Host speakers
 ```
 
+The API and browser UI share one FastAPI process. The CLI is a separate entry point that reuses `ConversationManager`. The existing Kokoro implementation remains in the codebase.
 
-## Voice activity detection
+## Development
 
-The WebRTC microphone path uses Silero VAD before Moonshine. VAD only gates audio admission to STT; it does not change the existing STTListener events or ConversationManager / SentenceGate behavior.
+```bash
+uv sync
+uv run pytest
+```
 
-The default Stage 1 configuration is:
-
-| Setting | Default |
-|---|---:|
-| Sample rate | 16 kHz |
-| VAD threshold | 0.5 |
-| Minimum silence | 300 ms |
-| Speech padding | 100 ms |
-| Pre-speech padding | 200 ms |
-| Backend frame | 512 samples |
-
-This stage detects speech versus non-speech. It does not distinguish the user's voice from another speaker such as a TV. Target-speaker verification and noise suppression are planned as subsequent stages.
+The Python project requires Python 3.11. Dependencies are declared in `pyproject.toml` and locked in `uv.lock`; end users do not need Python installed when using Docker.
