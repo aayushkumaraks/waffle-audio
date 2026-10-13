@@ -46,7 +46,8 @@ if (Test-Path (Join-Path $AppDir '.git')) {
 }
 Set-Location $AppDir
 
-Write-Host "\`nConfigure Ollama. The URL must be reachable FROM the Docker container."
+Write-Host ''
+Write-Host 'Configure Ollama. The URL must be reachable FROM the Docker container.'
 $ollamaUrl = Get-OrPrompt 'OLLAMA_BASE_URL' 'Ollama base URL' 'http://host.docker.internal:11434'
 if ($ollamaUrl -notmatch '^https?://\S+$') { throw 'OLLAMA_BASE_URL must be an http(s) URL without spaces.' }
 $ollamaModel = Get-OrPrompt 'OLLAMA_MODEL' 'Ollama model name' 'qwen3.5:4b'
@@ -61,11 +62,13 @@ Set-EnvValue 'OLLAMA_MODEL' $ollamaModel
 Set-EnvValue 'VOICECHAT_TTS_BACKEND' $backend
 Set-EnvValue 'VOICECHAT_TTS_VOICE' $voice
 
-Write-Host "\`nBuilding Docker image. This validates dependency installation before launch."
+Write-Host ''
+Write-Host 'Building Docker image. This validates dependency installation before launch.'
 docker compose build waffle-audio
 if ($LASTEXITCODE -ne 0) { throw 'Docker image build failed. Review the build output above.' }
 
-Write-Host "\`nChecking Ollama connectivity and running a minimal chat request from inside the image."
+Write-Host ''
+Write-Host 'Checking Ollama connectivity and running a minimal chat request from inside the image.'
 docker compose run --rm --no-deps --entrypoint python waffle-audio-cli scripts/validate-ollama.py
 $validationExit = $LASTEXITCODE
 if ($validationExit -eq 2) {
@@ -86,7 +89,8 @@ if ($validationExit -eq 2) {
     throw 'Ollama validation failed. Check that Ollama is running and OLLAMA_BASE_URL is reachable from Docker.'
 }
 
-Write-Host "\`nConfiguration and Docker build validated."
+Write-Host ''
+Write-Host 'Configuration and Docker build validated.'
 Write-Host 'Docker Desktop on Windows does not provide portable host microphone passthrough to Linux containers. Use web mode and your browser microphone.'
 Write-Host "One-click scripts: $(Join-Path $AppDir 'scripts')"
 if ((Read-Host 'Run Waffle Audio now? [y/N]') -match '^(y|yes)$') { & '.\scripts\run.ps1'; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; exit 0 }
