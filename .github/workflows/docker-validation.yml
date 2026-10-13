@@ -11,6 +11,7 @@ on:
       - "models/**"
       - "services/**"
       - "tools/webapp/**"
+      - "scripts/**"
       - ".dockerignore"
       - ".github/workflows/docker-validation.yml"
   push:
@@ -24,6 +25,7 @@ on:
       - "models/**"
       - "services/**"
       - "tools/webapp/**"
+      - "scripts/**"
       - ".dockerignore"
       - ".github/workflows/docker-validation.yml"
   workflow_dispatch:
