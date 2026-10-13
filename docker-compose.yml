@@ -49,7 +49,7 @@ services:
       - pocket-tts-cache:/app/voiceModels/pocket-tts-cache
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    command: ["uv", "run", "--frozen", "--no-sync", "python", "-m", "services.conversation.app"]
+    command: ["uv", "run", "--frozen", "--no-sync", "python", "-m", "services.conversation.cli"]
     profiles: ["cli"]
 
 volumes:
