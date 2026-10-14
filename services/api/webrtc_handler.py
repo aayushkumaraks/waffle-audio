@@ -13,6 +13,7 @@ import logging
 import os
 from typing import Optional
 
+import aioice.ice
 import av
 import numpy as np
 import numpy.typing as npt
@@ -31,6 +32,23 @@ from services.stt.src.stt_service import AudioQueueFull, STTService
 from services.tts.src.tts_service import AudioBuffer, TTSListener
 
 logger = logging.getLogger(__name__)
+
+# Monkey-patch aioice Connection._prune_components to prevent it from emptying
+# self._components to set() when remote offers arrive with a=end-of-candidates
+# but 0 remote candidates (which occurs in offline / local environments without STUN).
+# Pruning components to set() prevents aioice from creating ANY local sockets/candidates.
+_original_aioice_prune_components = aioice.ice.Connection._prune_components
+
+
+def _safe_aioice_prune_components(self: aioice.ice.Connection) -> None:
+    seen_components = set(map(lambda x: x.component, self._remote_candidates))
+    if seen_components:
+        missing_components = self._components - seen_components
+        if missing_components:
+            self._components = seen_components
+
+
+aioice.ice.Connection._prune_components = _safe_aioice_prune_components
 
 _WEBRTC_RATE = 48_000
 _FRAME_SAMPLES = 960
@@ -63,7 +81,7 @@ def _configure_aioice_port_range() -> None:
         if positional_local:
             local_addr = args[0]
 
-        logger.info("create_datagram_endpoint called: local_addr=%s, positional=%s", local_addr, positional_local)
+        logger.debug("create_datagram_endpoint called: local_addr=%s, positional=%s", local_addr, positional_local)
 
         if local_addr and len(local_addr) >= 2 and local_addr[1] == 0:
             last_error = None
@@ -81,10 +99,10 @@ def _configure_aioice_port_range() -> None:
                     kwargs_with_port["local_addr"] = address
                 try:
                     res = await original(protocol_factory, *args_with_port, **kwargs_with_port)
-                    logger.info("Bound UDP socket to %s", address)
+                    logger.debug("Bound UDP socket to %s", address)
                     return res
                 except OSError as exc:
-                    logger.warning("Failed to bind UDP %s: %s", address, exc)
+                    logger.debug("Failed to bind UDP %s: %s", address, exc)
                     last_error = exc
             logger.error("No free UDP ports in range %d-%d, last error: %s", minimum, maximum, last_error)
             raise OSError(
@@ -317,7 +335,15 @@ async def create_answer(
             _peer_connections.discard(pc)
 
     try:
-        logger.info("Received offer SDP (len=%d):\n%s", len(sdp), sdp)
+        # If the remote offer contains a=end-of-candidates but no candidates (common in offline/local
+        # browser environments), strip a=end-of-candidates before aiortc processes it so that
+        # ICE components are not pruned and remote candidate completion is not signaled prematurely.
+        if "a=candidate:" not in sdp:
+            sdp = "\r\n".join(
+                line for line in sdp.splitlines() if line.strip() != "a=end-of-candidates"
+            ) + "\r\n"
+
+        logger.debug("Received offer SDP (len=%d):\n%s", len(sdp), sdp)
         await pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type=sdp_type))
         answer = await pc.createAnswer()
         await pc.setLocalDescription(answer)
@@ -328,14 +354,7 @@ async def create_answer(
             raise RuntimeError("Failed to generate local WebRTC session description.")
 
         answer_sdp = local.sdp
-        logger.info("Local SDP right after gathering wait (state=%s):\n%s", pc.iceGatheringState, answer_sdp)
-        for i, t in enumerate(pc.getTransceivers()):
-            dtls = getattr(t.receiver, "transport", None) or getattr(t.sender, "transport", None)
-            ice = getattr(dtls, "transport", None) or getattr(dtls, "_transport", None)
-            gatherer = getattr(ice, "iceGatherer", None)
-            cands = gatherer.getLocalCandidates() if gatherer else []
-            logger.info("Transceiver %d (%s, dir=%s): dtls=%s, ice=%s, gatherer_state=%s, candidates=%s",
-                        i, t.kind, t.direction, dtls, ice, getattr(gatherer, "state", None), cands)
+        logger.debug("Local SDP after gathering (state=%s):\n%s", pc.iceGatheringState, answer_sdp)
 
         if "a=candidate:" not in answer_sdp:
             candidate_lines = []

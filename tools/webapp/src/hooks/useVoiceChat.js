@@ -496,8 +496,9 @@ export function useVoiceChat() {
       }
 
       const offer = await peer.createOffer()
+      const gatheringPromise = waitForIceGathering(peer)
       await peer.setLocalDescription(offer)
-      const gatheredCandidates = await waitForIceGathering(peer)
+      const gatheredCandidates = await gatheringPromise
 
       let offerSdp = peer.localDescription?.sdp || ''
       if (gatheredCandidates.length > 0 && !offerSdp.includes('a=candidate:')) {
