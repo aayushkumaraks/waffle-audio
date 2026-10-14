@@ -97,6 +97,10 @@ class AudioPlayer(TTSListener):
 
                     self._playing.set()
                     stream.write(np.column_stack((audio, audio)))
+                except sd.PortAudioError as exc:
+                    if not getattr(self, "_device_warned", False):
+                        logger.info("No physical audio playback device available (%s); server-side speaker output disabled.", exc)
+                        self._device_warned = True
                 except Exception:
                     logger.exception("Audio playback failed.")
                 finally:

@@ -8,9 +8,11 @@ Flow: browser mic → audio preprocessing/VAD → STTService
 from __future__ import annotations
 
 import asyncio
+import fractions
 import json
 import logging
 import os
+import time
 from typing import Optional
 
 import aioice.ice
@@ -24,7 +26,7 @@ from aiortc import (
     RTCPeerConnection,
     RTCSessionDescription,
 )
-from aiortc.mediastreams import AudioStreamTrack
+from aiortc.mediastreams import AudioStreamTrack, MediaStreamError
 from aiortc.sdp import candidate_to_sdp
 
 from services.audio_processing.src import VADService
@@ -230,9 +232,11 @@ class TTSOutputTrack(AudioStreamTrack, TTSListener):
     """Streams selected TTS-backend audio to the browser via WebRTC."""
 
     def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
-        AudioStreamTrack.__init__(self)
+        super().__init__()
         self._loop = loop
         self._buffer = np.array([], dtype=np.float32)
+        self._start: float | None = None
+        self._timestamp = 0
 
     def on_synthesis_started(self) -> None:
         pass
@@ -252,22 +256,35 @@ class TTSOutputTrack(AudioStreamTrack, TTSListener):
         self._buffer = np.concatenate([self._buffer, resampled])
 
     async def recv(self) -> av.AudioFrame:
-        pts, time_base = await self.next_timestamp()
+        if self.readyState != "live":
+            raise MediaStreamError
+
+        sample_rate = _WEBRTC_RATE
+        samples = _FRAME_SAMPLES
+
+        if self._start is not None:
+            self._timestamp += samples
+            wait = self._start + (self._timestamp / sample_rate) - time.time()
+            if wait > 0:
+                await asyncio.sleep(wait)
+        else:
+            self._start = time.time()
+            self._timestamp = 0
 
         if len(self._buffer) >= _FRAME_SAMPLES:
-            samples = self._buffer[:_FRAME_SAMPLES]
+            chunk = self._buffer[:_FRAME_SAMPLES]
             self._buffer = self._buffer[_FRAME_SAMPLES:]
         else:
-            samples = np.zeros(_FRAME_SAMPLES, dtype=np.float32)
+            chunk = np.zeros(_FRAME_SAMPLES, dtype=np.float32)
 
         frame = av.AudioFrame.from_ndarray(
-            samples.reshape(1, -1),
+            chunk.reshape(1, -1),
             format="fltp",
             layout="mono",
         )
-        frame.pts = pts
-        frame.time_base = time_base
-        frame.sample_rate = _WEBRTC_RATE
+        frame.pts = self._timestamp
+        frame.time_base = fractions.Fraction(1, sample_rate)
+        frame.sample_rate = sample_rate
         return frame
 
 
