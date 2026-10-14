@@ -53,11 +53,14 @@ The API allows the local Vite/preview origins by default. For a different fronte
 export VOICECHAT_CORS_ALLOW_ORIGINS="https://app.example.com"
 ```
 
-The Vite configuration uses relative asset paths so the generated SPA can be mounted by the FastAPI service at `/ui`.
+The Vite configuration uses relative asset paths so the generated SPA can be mounted by the FastAPI service at `/ui` (with root `/` automatically redirecting to `/ui/`).
 
-The API mounts `tools/webapp` at `/ui`. Start the API using the repository's normal API entrypoint, then open `http://localhost:3000/ui` (or the configured API host/port).
+In Docker, the multi-stage build automatically runs `npm ci` and `npm run build`, packaging the production bundle into `/app/tools/webapp/dist` while also running the Vite development server on port `5173`.
 
-For a local preview of the production bundle:
+- **Production URL**: `http://localhost:3000/ui` (or `http://localhost:3000`)
+- **Vite Server**: `http://localhost:5173`
+
+For a local preview of the production bundle without Docker:
 
 ```bash
 npm run preview -- --host 0.0.0.0

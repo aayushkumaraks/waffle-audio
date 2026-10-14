@@ -1,91 +1,200 @@
-# Waffle-Audio
+# Waffle Audio
 
-A real-time, voice-to-voice AI assistant that runs entirely on your local machine.
+A local, real-time voice-to-voice AI assistant that runs entirely on your own hardware. 
 
-You speak into a microphone. The assistant transcribes what you say, generates a reply
-using a locally hosted language model, and speaks the reply back through your speakers.
+Waffle Audio transcribes user speech using streaming STT, generates conversational responses with a local language model, and synthesizes natural streaming speech—delivering a responsive, low-latency conversational experience with both a modern browser interface and a Linux terminal CLI.
 
-## How it works
-
-```
-Microphone --> VAD (Silero) --> STT (Moonshine) --> LLM (Ollama) --> TTS (Kokoro / Pocket TTS) --> Speakers
+```text
+Browser Mic ──▶ WebRTC / VAD ──▶ STT (Moonshine) ──▶ LLM (Ollama) ──▶ TTS (Pocket TTS) ──▶ Browser Speakers
+CLI Mic     ──▶ STT (Moonshine) ──▶ ConversationManager ──▶ Ollama ──▶ TTS (Pocket TTS) ──▶ Host Speakers
 ```
 
-| Stage | Technology         | Notes                                      |
-|-------|--------------------|--------------------------------------------|
-| STT   | Moonshine          | Streaming speech-to-text, runs on CPU/GPU  |
-| LLM   | Ollama (local)     | Default model: qwen3.5:4b                  |
-| TTS   | Kokoro / Pocket TTS | Selectable streaming neural text-to-speech |
-| Audio | sounddevice / PortAudio | Cross-platform audio I/O              |
+---
 
-## Key features
+## Key Features
 
-- Echo cancellation: microphone input is muted while the assistant is speaking
-- Adaptive sentence gate: fragments the user speaks across short pauses are
-  accumulated before the LLM call, avoiding premature or duplicate responses
-- Conversation history: every turn is tracked and printed on exit
-- Voice-friendly LLM prompt: the model is instructed to reply in 1-2 plain
-  sentences with no emojis or markdown
+- **Full Local Privacy**: Audio processing, transcription, LLM inference, and speech synthesis run locally without external cloud dependencies.
+- **Production Containerization**: Multi-stage Docker image packaging the FastAPI backend, compiled React SPA, and Vite development server into a single portable runtime.
+- **Cross-Platform Browser Mode**: Browser-based microphone and speaker audio using WebRTC, supported across macOS, Windows, and Linux.
+- **Local Network Accessible**: Exposed on `0.0.0.0` with configurable WebRTC UDP media port forwarding (`50000-50100/udp`) so phones, tablets, or other computers on your LAN can connect.
+- **Linux Audio Passthrough CLI**: Dedicated low-latency CLI mode with direct `/dev/snd` hardware access for Linux desktop and embedded setups.
+- **Persistent Voice Caching**: Pocket TTS model weights and voice embeddings persist in a dedicated Docker volume, preventing redownloads across restarts.
 
-## Project structure
+---
 
-```
-services/
-  conversation/   Orchestrates STT -> LLM -> TTS
-    src/
-      manager.py          ConversationManager
-      sentence_gate.py    Adaptive silence-gap gate
-  stt/            Moonshine streaming transcription wrapper
-  llm/            Ollama HTTP provider + queue-based service
-  tts/            Feature-flagged Kokoro and Pocket TTS services
-  audio/          Blocking audio playback worker
-models/           Shared data models (Message)
-voiceModels/      Kokoro ONNX model files (not committed)
-pyproject.toml    Dependencies managed by uv
+## Quick Install (One-Click)
+
+### Prerequisites
+
+1. **[Docker Desktop](https://docs.docker.com/get-docker/)** (macOS / Windows) or **Docker Engine + Docker Compose v2** (Linux).
+2. **[Ollama](https://ollama.com)** installed and running on the host machine.
+3. **Git**.
+
+### Installation Command
+
+**macOS / Linux / WSL:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/aayushkumaraks/waffle-audio/main/scripts/install.sh -o install-waffle-audio.sh
+bash install-waffle-audio.sh
 ```
 
-## Quick start
+**Windows PowerShell:**
+```powershell
+irm https://raw.githubusercontent.com/aayushkumaraks/waffle-audio/main/scripts/install.ps1 -OutFile install-waffle-audio.ps1
+powershell -ExecutionPolicy Bypass -File .\install-waffle-audio.ps1
+```
 
-See [SETUP.md](SETUP.md) for first-time installation and [RUN.md](RUN.md) to start the
-app.
+The installer verifies Docker and Compose v2, prompts for configuration (saving values to `.env`), builds the multi-stage image, tests host Ollama reachability, and validates model inference before launching.
 
-## HTTP API
+---
 
-All services are exposed on one HTTP server process.
+## Accessing the Application
 
-- Default port: `3000`
-- Configurable via environment variable: `VOICECHAT_API_PORT`
-- Host configurable via: `VOICECHAT_API_HOST`
+When running in **Web Mode**, the container exposes both the compiled production interface and the development server:
 
-Start the API server:
+| Service | URL | Description |
+|---|---|---|
+| **Web UI (Production)** | [`http://localhost:3000`](http://localhost:3000) or [`/ui`](http://localhost:3000/ui) | Optimized, compiled React SPA served directly by FastAPI. |
+| **Webapp (Vite Server)** | [`http://localhost:5173`](http://localhost:5173) | Vite server running concurrently with hot module reload support. |
+| **API Docs (Swagger)** | [`http://localhost:3000/docs`](http://localhost:3000/docs) | Interactive OpenAPI documentation. |
+| **Health Check** | [`http://localhost:3000/health`](http://localhost:3000/health) | Service uptime and backend status monitor. |
+
+### Accessing From Other Devices on Your Local Network (LAN)
+
+Both port `3000` and port `5173` bind to `0.0.0.0`. To connect from another computer, smartphone, or tablet on your Wi-Fi/Ethernet:
+1. Find your host machine's local IP address (e.g. `192.168.1.100`).
+2. Open `http://192.168.1.100:3000` in the client browser.
+3. For WebRTC microphone streaming over LAN, the container forwards UDP ports `50000-50100/udp` and automatically resolves client candidate IPs. If needed, you can explicitly set `VOICECHAT_WEBRTC_ADVERTISED_IP=192.168.1.100` in `.env`.
+
+> [!NOTE]
+> Modern web browsers restrict microphone access to **secure contexts** (`localhost`, `127.0.0.1`, or `https://`). When connecting via a remote LAN IP, you may need to configure a reverse proxy with TLS (e.g., Caddy or Nginx) or enable insecure origins in browser flags (e.g., `chrome://flags/#unsafely-treat-insecure-origin-as-secure`).
+
+---
+
+## Docker & Compose Commands
+
+### Start Services
 
 ```bash
+# Start Web UI + API in the background
+docker compose --profile web up --build -d
+
+# View live container logs
+docker compose logs -f waffle-audio
+
+# Check container health and running ports
+docker compose ps
+
+# Stop containers
+docker compose --profile web down
+```
+
+### Run Terminal CLI Mode (Linux Only)
+
+On Linux hosts with direct `/dev/snd` hardware access:
+```bash
+docker compose --profile cli run --build --rm --device /dev/snd:/dev/snd waffle-audio-cli
+```
+
+### Windows & WSL 2 Usage
+
+If you use WSL 2 on Windows:
+- Ensure WSL 2 integration is enabled in **Docker Desktop Settings** → **Resources** → **WSL integration** → toggle your distro **ON**.
+- Alternatively, invoke commands using `docker.exe` directly from WSL:
+  ```bash
+  docker.exe compose --profile web up -d
+  ```
+
+---
+
+## Configuration
+
+Settings can be customized in `.env` or passed as environment variables:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OLLAMA_BASE_URL` | `http://host.docker.internal:11434` | Ollama endpoint reachable from inside the container. |
+| `OLLAMA_MODEL` | `qwen3.5:4b` | Ollama model tag for conversation generation. |
+| `VOICECHAT_API_PORT` | `3000` | Host port mapped to the FastAPI backend and Web UI. |
+| `VOICECHAT_WEBAPP_PORT` | `5173` | Host port mapped to the Vite webapp server. |
+| `VOICECHAT_TTS_BACKEND` | `pocket` | TTS engine (`pocket` or `kokoro`). |
+| `VOICECHAT_TTS_VOICE` | `anna` | Voice identifier for Pocket TTS. |
+| `VOICECHAT_WEBRTC_UDP_PORT_MIN` | `50000` | Lower bound for WebRTC RTP/RTCP UDP allocation. |
+| `VOICECHAT_WEBRTC_UDP_PORT_MAX` | `50100` | Upper bound for WebRTC RTP/RTCP UDP allocation. |
+| `VOICECHAT_WEBRTC_ADVERTISED_IP` | *(empty)* | Optional static IP advertised in ICE candidates for complex LAN/NAT setups. |
+| `VOICECHAT_CORS_ALLOW_ORIGINS` | `*` | Allowed browser origins for cross-origin API requests. |
+
+### Pocket TTS Voice Options
+
+- **English**: `alba`, `anna`, `azelma`, `bill_boerst`, `caro_davy`, `charles`, `cosette`, `eponine`, `eve`, `fantine`, `george`, `jane`, `jean`, `javert`, `marius`, `mary`, `michael`, `paul`, `peter_yearsley`, `stuart_bell`, `vera`
+- **French**: `estelle`
+- **German**: `juergen`
+- **Italian**: `giovanni`
+- **Portuguese**: `rafael`
+- **Spanish**: `lola`
+
+---
+
+## Local Development (Without Docker)
+
+If developing locally without Docker, Python 3.11 and Node.js 20+ are required.
+
+### 1. Backend Setup
+
+```bash
+# Install Python dependencies with uv
+uv sync
+
+# Run tests
+uv run python -m unittest discover tests
+
+# Start API server
 uv run python -m services.api.app
 ```
 
-Set `VOICECHAT_TTS_BACKEND=pocket` to use Pocket TTS. Omitting it (or setting
-`kokoro`) retains the existing Kokoro backend.
+### 2. Webapp Setup
 
-Then open:
+```bash
+cd tools/webapp
 
-```text
-http://localhost:3000/docs
+# Install dependencies
+npm ci
+
+# Start Vite dev server with host binding
+npm run dev -- --host 0.0.0.0
+
+# Build production bundle for static serving
+npm run build
 ```
 
+---
 
-## Voice activity detection
+## Project Structure
 
-The WebRTC microphone path uses Silero VAD before Moonshine. VAD only gates audio admission to STT; it does not change the existing STTListener events or ConversationManager / SentenceGate behavior.
+```text
+├── Dockerfile                    # Multi-stage production container build (Node + Python)
+├── docker-compose.yml            # Services for Web mode (dual port + WebRTC UDP) and CLI
+├── constants.py                  # Environment-aware static configuration & defaults
+├── scripts/
+│   ├── start-all.sh              # Container supervisor running FastAPI and Vite concurrently
+│   ├── install.sh / install.ps1  # Automated host setup and Ollama validation scripts
+│   ├── run.sh / run.ps1          # Platform-aware interactive launchers
+│   ├── create-service.sh/.ps1    # Background service manager
+│   └── validate-ollama.py        # Ollama connectivity and test inference checker
+├── services/
+│   ├── api/                      # FastAPI REST & WebRTC signaling endpoints
+│   ├── audio/                    # Sound playback worker
+│   ├── audio_processing/         # Silero VAD speech detection
+│   ├── conversation/             # Turn coordinator & quiet CLI runner
+│   ├── llm/                      # Ollama provider client
+│   ├── stt/                      # Moonshine streaming speech-to-text
+│   └── tts/                      # Pocket TTS and Kokoro synthesis engines
+└── tools/
+    └── webapp/                   # React 19 single-page application (Vite)
+```
 
-The default Stage 1 configuration is:
+---
 
-| Setting | Default |
-|---|---:|
-| Sample rate | 16 kHz |
-| VAD threshold | 0.5 |
-| Minimum silence | 300 ms |
-| Speech padding | 100 ms |
-| Pre-speech padding | 200 ms |
-| Backend frame | 512 samples |
+## License
 
-This stage detects speech versus non-speech. It does not distinguish the user's voice from another speaker such as a TV. Target-speaker verification and noise suppression are planned as subsequent stages.
+This project is open-source under the [MIT License](LICENSE).

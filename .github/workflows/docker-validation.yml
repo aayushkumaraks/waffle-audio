@@ -1,0 +1,61 @@
+name: Docker validation
+
+on:
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "constants.py"
+      - "models/**"
+      - "services/**"
+      - "tools/webapp/**"
+      - "scripts/**"
+      - ".dockerignore"
+      - ".github/workflows/docker-validation.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "constants.py"
+      - "models/**"
+      - "services/**"
+      - "tools/webapp/**"
+      - "scripts/**"
+      - ".dockerignore"
+      - ".github/workflows/docker-validation.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: false
+          tags: waffle-audio:ci
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
