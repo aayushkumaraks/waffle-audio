@@ -294,12 +294,24 @@ async def _receive_browser_audio(
     vad: VADService,
 ) -> None:
     """Continuously read browser audio, gate it with VAD, then push to STT."""
+    logger.info("Started receiving browser audio track: id=%s", track.id)
+    frame_count = 0
     try:
         while True:
             try:
                 frame = await track.recv()
-            except Exception:
+            except Exception as exc:
+                logger.info("Browser audio track ended or raised: %s", exc)
                 break
+
+            frame_count += 1
+            if frame_count % 100 == 1:
+                logger.info(
+                    "Receiving audio frames (frame #%d, rate=%s, channels=%d)",
+                    frame_count,
+                    frame.sample_rate,
+                    len(frame.layout.channels),
+                )
 
             samples = _frame_to_float32_mono(frame)
             samples_16k = _resample(samples, frame.sample_rate, _STT_RATE)
@@ -313,11 +325,13 @@ async def _receive_browser_audio(
             if speech_audio.size == 0:
                 continue
 
+            logger.info("VAD detected speech (%d samples @ 16kHz), pushing to STT", speech_audio.size)
             try:
                 stt.push(speech_audio, _STT_RATE)
             except AudioQueueFull:
-                pass
+                logger.warning("STT audio queue is full; dropping WebRTC speech frame.")
     finally:
+        logger.info("Stopped receiving browser audio track (total frames: %d)", frame_count)
         vad.reset()
 
 
@@ -341,6 +355,7 @@ async def create_answer(
 
     @pc.on("track")
     async def on_track(track: MediaStreamTrack) -> None:
+        logger.info("WebRTC received track: kind=%s, id=%s", track.kind, track.id)
         if track.kind == "audio":
             asyncio.create_task(_receive_browser_audio(track, stt, vad))
 

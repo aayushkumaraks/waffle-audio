@@ -6,7 +6,7 @@ const CHUNK_SAMPLES = 16000
 const SILENCE_SECONDS = 1.2
 const STT_TIMEOUT_MS = 15000
 const MAX_RECORDING_MS = 60000
-const LIVE_POLL_MS = 700
+const LIVE_POLL_MS = 1500
 const ICE_GATHERING_TIMEOUT_MS = 15000
 const API_STORAGE_KEY = 'waffle.apiUrl'
 const DEFAULT_ICE_SERVERS = []
@@ -117,6 +117,7 @@ export function useVoiceChat() {
   const localStreamRef = useRef(null)
   const remoteAudioRef = useRef(null)
   const pollRef = useRef(null)
+  const pollingRef = useRef(false)
   const knownHistoryRef = useRef(0)
   const endRef = useRef(null)
   const mountedRef = useRef(true)
@@ -373,6 +374,7 @@ export function useVoiceChat() {
   const disconnectLive = useCallback(() => {
     window.clearInterval(pollRef.current)
     pollRef.current = null
+    pollingRef.current = false
     window.clearTimeout(recordingTimerRef.current)
     recordingTimerRef.current = null
 
@@ -392,8 +394,9 @@ export function useVoiceChat() {
   }, [])
 
   const pollLive = useCallback(async () => {
-    if (!mountedRef.current || !peerRef.current) return
+    if (!mountedRef.current || !peerRef.current || pollingRef.current) return
 
+    pollingRef.current = true
     try {
       const events = await (await api.get('/stt/transcripts')).json()
       const live = [...events].reverse().find(event => event.kind === 'updated' || event.kind === 'started')
@@ -416,6 +419,8 @@ export function useVoiceChat() {
       }
     } catch {
       // A transient polling failure should not terminate the media session.
+    } finally {
+      pollingRef.current = false
     }
   }, [api])
 
