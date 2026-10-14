@@ -17,6 +17,8 @@ if ($start -match '^(n|no)$') { Write-Host "No changes made. Scripts are located
 docker compose --profile web up --build -d waffle-audio
 if ($LASTEXITCODE -ne 0) { throw 'Docker Compose failed to build or start the web service.' }
 $port = if ($env:VOICECHAT_API_PORT) { $env:VOICECHAT_API_PORT } else { '3000' }
+$webPort = if ($env:VOICECHAT_WEBAPP_PORT) { $env:VOICECHAT_WEBAPP_PORT } else { '5173' }
 Write-Host "Web UI: http://localhost:$port/ui"
+Write-Host "Webapp (Vite): http://localhost:$webPort"
 Write-Host "API docs: http://localhost:$port/docs"
 Write-Host 'Logs: docker compose logs -f waffle-audio'

@@ -15,7 +15,10 @@ def _int_from_env(name: str, default: int) -> int:
         raise ValueError(f"Environment variable {name} must be an integer.") from exc
 
 # Ollama / LLM
-OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://172.19.96.1:11434")
+_ollama_raw = os.getenv("OLLAMA_BASE_URL") or os.getenv("OLLAMA_HOST") or "http://host.docker.internal:11434"
+if not _ollama_raw.startswith(("http://", "https://")):
+    _ollama_raw = f"http://{_ollama_raw}"
+OLLAMA_BASE_URL: str = _ollama_raw
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen3.5:4b")
 
 # Kokoro backend is retained for existing users and local model files.

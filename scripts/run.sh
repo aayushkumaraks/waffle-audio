@@ -21,6 +21,7 @@ if [[ "$cli_available" == true ]]; then
     2)
       docker compose --profile web up --build -d waffle-audio
       echo "Web UI: http://localhost:${VOICECHAT_API_PORT:-3000}/ui"
+      echo "Webapp (Vite): http://localhost:${VOICECHAT_WEBAPP_PORT:-5173}"
       echo "API docs: http://localhost:${VOICECHAT_API_PORT:-3000}/docs"
       echo "Logs: docker compose logs -f waffle-audio"
       ;;
@@ -40,6 +41,7 @@ else
     ""|[Yy]|[Yy][Ee][Ss])
       docker compose --profile web up --build -d waffle-audio
       echo "Web UI: http://localhost:${VOICECHAT_API_PORT:-3000}/ui"
+      echo "Webapp (Vite): http://localhost:${VOICECHAT_WEBAPP_PORT:-5173}"
       echo "API docs: http://localhost:${VOICECHAT_API_PORT:-3000}/docs"
       echo "Logs: docker compose logs -f waffle-audio"
       ;;

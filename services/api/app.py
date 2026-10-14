@@ -13,9 +13,9 @@ from pathlib import Path
 from typing import Literal
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -347,10 +347,23 @@ class WebRTCOfferRequest(BaseModel):
     type: str
 
 
+@app.get("/")
+def root_redirect():
+    return RedirectResponse(url="/ui/")
+
+
 @app.post("/webrtc/offer")
-async def webrtc_offer(offer: WebRTCOfferRequest) -> dict[str, str]:
+async def webrtc_offer(offer: WebRTCOfferRequest, request: Request) -> dict[str, str]:
     """Exchange SDP: accept a browser offer and return the server answer."""
-    return await _webrtc_create_answer(offer.sdp, offer.type, runtime.tts, runtime.stt, runtime.vad)
+    client_host = request.headers.get("host", "").split(":")[0]
+    return await _webrtc_create_answer(
+        offer.sdp,
+        offer.type,
+        runtime.tts,
+        runtime.stt,
+        runtime.vad,
+        client_host=client_host,
+    )
 
 
 @app.get("/audio/status")
@@ -359,8 +372,10 @@ def audio_status() -> dict[str, bool]:
 
 
 _WEBAPP_DIR = Path(__file__).resolve().parent.parent.parent / "tools" / "webapp"
-if _WEBAPP_DIR.is_dir():
-    app.mount("/ui", StaticFiles(directory=_WEBAPP_DIR, html=True), name="webapp")
+_DIST_DIR = _WEBAPP_DIR / "dist"
+_STATIC_DIR = _DIST_DIR if _DIST_DIR.is_dir() else _WEBAPP_DIR
+if _STATIC_DIR.is_dir():
+    app.mount("/ui", StaticFiles(directory=_STATIC_DIR, html=True), name="webapp")
 
 
 def main() -> None:

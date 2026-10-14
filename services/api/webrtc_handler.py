@@ -36,8 +36,64 @@ _FRAME_SAMPLES = 960
 _STT_RATE = 16_000
 _ICE_GATHERING_TIMEOUT_SECONDS = 10.0
 _DEFAULT_STUN_SERVERS = "stun:stun.l.google.com:19302"
+_DEFAULT_ICE_PORT_MIN = 50000
+_DEFAULT_ICE_PORT_MAX = 50100
 
 _peer_connections: set[RTCPeerConnection] = set()
+
+
+def _configure_aioice_port_range() -> None:
+    """Configure aioice to bind its dynamic UDP sockets to the published port range."""
+    minimum = int(os.getenv("VOICECHAT_WEBRTC_UDP_PORT_MIN", _DEFAULT_ICE_PORT_MIN))
+    maximum = int(os.getenv("VOICECHAT_WEBRTC_UDP_PORT_MAX", _DEFAULT_ICE_PORT_MAX))
+    if not (1 <= minimum <= maximum <= 65535):
+        raise ValueError("VOICECHAT_WEBRTC_UDP_PORT_MIN/MAX must describe a valid UDP port range.")
+
+    loop = asyncio.get_running_loop()
+    if getattr(loop, "_waffle_original_create_datagram_endpoint", None) is not None:
+        return
+
+    original = loop.create_datagram_endpoint
+    setattr(loop, "_waffle_original_create_datagram_endpoint", original)
+
+    async def create_datagram_endpoint(protocol_factory, *args, **kwargs):
+        local_addr = kwargs.get("local_addr")
+        if local_addr and len(local_addr) >= 2 and local_addr[1] == 0:
+            host = local_addr[0]
+            last_error = None
+            width = maximum - minimum + 1
+            start = int.from_bytes(os.urandom(4), "big") % width
+            for offset in range(width):
+                port = minimum + ((start + offset) % width)
+                endpoint_kwargs = dict(kwargs)
+                endpoint_kwargs["local_addr"] = (host, port, *local_addr[2:])
+                try:
+                    return await original(protocol_factory, *args, **endpoint_kwargs)
+                except OSError as exc:
+                    last_error = exc
+            raise OSError(
+                f"No free UDP ports in configured WebRTC range {minimum}-{maximum}."
+            ) from last_error
+        return await original(protocol_factory, *args, **kwargs)
+
+    loop.create_datagram_endpoint = create_datagram_endpoint
+
+
+def _rewrite_advertised_candidates(sdp_text: str, client_host: str = "") -> str:
+    """Optionally advertise a host-reachable IP while retaining UDP ports."""
+    advertised_ip = os.getenv("VOICECHAT_WEBRTC_ADVERTISED_IP", "").strip() or client_host
+    if not advertised_ip or advertised_ip in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}:
+        return sdp_text
+
+    rewritten = []
+    for line in sdp_text.splitlines():
+        if line.startswith("a=candidate:"):
+            fields = line.split()
+            if len(fields) >= 8 and fields[7] == "host":
+                fields[4] = advertised_ip
+                line = " ".join(fields)
+        rewritten.append(line)
+    return "\r\n".join(rewritten) + "\r\n"
 
 
 def _ice_servers() -> list[RTCIceServer]:
@@ -217,9 +273,11 @@ async def create_answer(
     tts,
     stt: STTService,
     vad: VADService,
+    client_host: str = "",
 ) -> dict[str, str]:
     """Accept a browser offer and return an SDP answer with gathered ICE candidates."""
     loop = asyncio.get_running_loop()
+    _configure_aioice_port_range()
     pc = RTCPeerConnection(RTCConfiguration(iceServers=_ice_servers()))
     _peer_connections.add(pc)
 
@@ -257,7 +315,7 @@ async def create_answer(
             pc.iceGatheringState,
             sum(line.startswith("a=candidate:") for line in local.sdp.splitlines()),
         )
-        return {"sdp": local.sdp, "type": local.type}
+        return {"sdp": _rewrite_advertised_candidates(local.sdp, client_host=client_host), "type": local.type}
     except Exception:
         tts.remove_listener(tts_track)
         _peer_connections.discard(pc)
