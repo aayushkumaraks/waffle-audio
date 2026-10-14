@@ -63,6 +63,8 @@ def _configure_aioice_port_range() -> None:
         if positional_local:
             local_addr = args[0]
 
+        logger.info("create_datagram_endpoint called: local_addr=%s, positional=%s", local_addr, positional_local)
+
         if local_addr and len(local_addr) >= 2 and local_addr[1] == 0:
             last_error = None
             host = local_addr[0]
@@ -78,9 +80,13 @@ def _configure_aioice_port_range() -> None:
                 else:
                     kwargs_with_port["local_addr"] = address
                 try:
-                    return await original(protocol_factory, *args_with_port, **kwargs_with_port)
+                    res = await original(protocol_factory, *args_with_port, **kwargs_with_port)
+                    logger.info("Bound UDP socket to %s", address)
+                    return res
                 except OSError as exc:
+                    logger.warning("Failed to bind UDP %s: %s", address, exc)
                     last_error = exc
+            logger.error("No free UDP ports in range %d-%d, last error: %s", minimum, maximum, last_error)
             raise OSError(
                 f"No free UDP ports in configured WebRTC range {minimum}-{maximum}."
             ) from last_error
@@ -311,6 +317,7 @@ async def create_answer(
             _peer_connections.discard(pc)
 
     try:
+        logger.info("Received offer SDP (len=%d):\n%s", len(sdp), sdp)
         await pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type=sdp_type))
         answer = await pc.createAnswer()
         await pc.setLocalDescription(answer)
@@ -321,13 +328,21 @@ async def create_answer(
             raise RuntimeError("Failed to generate local WebRTC session description.")
 
         answer_sdp = local.sdp
+        logger.info("Local SDP right after gathering wait (state=%s):\n%s", pc.iceGatheringState, answer_sdp)
+        for i, t in enumerate(pc.getTransceivers()):
+            dtls = getattr(t.receiver, "transport", None) or getattr(t.sender, "transport", None)
+            ice = getattr(dtls, "transport", None) or getattr(dtls, "_transport", None)
+            gatherer = getattr(ice, "iceGatherer", None)
+            cands = gatherer.getLocalCandidates() if gatherer else []
+            logger.info("Transceiver %d (%s, dir=%s): dtls=%s, ice=%s, gatherer_state=%s, candidates=%s",
+                        i, t.kind, t.direction, dtls, ice, getattr(gatherer, "state", None), cands)
+
         if "a=candidate:" not in answer_sdp:
             candidate_lines = []
             for t in pc.getTransceivers():
-                receiver = getattr(t, "receiver", None)
-                transport = getattr(receiver, "transport", None)
-                underlying = getattr(transport, "_transport", None)
-                gatherer = getattr(underlying, "iceGatherer", None)
+                dtls = getattr(t.receiver, "transport", None) or getattr(t.sender, "transport", None)
+                ice = getattr(dtls, "transport", None) or getattr(dtls, "_transport", None)
+                gatherer = getattr(ice, "iceGatherer", None)
                 if gatherer:
                     for c in gatherer.getLocalCandidates():
                         candidate_lines.append(f"a=candidate:{candidate_to_sdp(c)}")
