@@ -24,6 +24,7 @@ from aiortc import (
     RTCSessionDescription,
 )
 from aiortc.mediastreams import AudioStreamTrack
+from aiortc.sdp import candidate_to_sdp
 
 from services.audio_processing.src import VADService
 from services.stt.src.stt_service import AudioQueueFull, STTService
@@ -35,7 +36,7 @@ _WEBRTC_RATE = 48_000
 _FRAME_SAMPLES = 960
 _STT_RATE = 16_000
 _ICE_GATHERING_TIMEOUT_SECONDS = 10.0
-_DEFAULT_STUN_SERVERS = "stun:stun.l.google.com:19302"
+_DEFAULT_STUN_SERVERS = ""
 _DEFAULT_ICE_PORT_MIN = 50000
 _DEFAULT_ICE_PORT_MAX = 50100
 
@@ -58,17 +59,26 @@ def _configure_aioice_port_range() -> None:
 
     async def create_datagram_endpoint(protocol_factory, *args, **kwargs):
         local_addr = kwargs.get("local_addr")
+        positional_local = local_addr is None and bool(args)
+        if positional_local:
+            local_addr = args[0]
+
         if local_addr and len(local_addr) >= 2 and local_addr[1] == 0:
-            host = local_addr[0]
             last_error = None
+            host = local_addr[0]
             width = maximum - minimum + 1
             start = int.from_bytes(os.urandom(4), "big") % width
             for offset in range(width):
                 port = minimum + ((start + offset) % width)
-                endpoint_kwargs = dict(kwargs)
-                endpoint_kwargs["local_addr"] = (host, port, *local_addr[2:])
+                address = (host, port, *local_addr[2:])
+                args_with_port = list(args)
+                kwargs_with_port = dict(kwargs)
+                if positional_local:
+                    args_with_port[0] = address
+                else:
+                    kwargs_with_port["local_addr"] = address
                 try:
-                    return await original(protocol_factory, *args, **endpoint_kwargs)
+                    return await original(protocol_factory, *args_with_port, **kwargs_with_port)
                 except OSError as exc:
                     last_error = exc
             raise OSError(
@@ -80,10 +90,13 @@ def _configure_aioice_port_range() -> None:
 
 
 def _rewrite_advertised_candidates(sdp_text: str, client_host: str = "") -> str:
-    """Optionally advertise a host-reachable IP while retaining UDP ports."""
-    advertised_ip = os.getenv("VOICECHAT_WEBRTC_ADVERTISED_IP", "").strip() or client_host
-    if not advertised_ip or advertised_ip in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}:
-        return sdp_text
+    """Rewrite container-internal ICE candidates to an address reachable by the browser."""
+    advertised_ip = os.getenv("VOICECHAT_WEBRTC_ADVERTISED_IP", "").strip()
+    if not advertised_ip:
+        if client_host and client_host not in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}:
+            advertised_ip = client_host
+        else:
+            advertised_ip = "127.0.0.1"
 
     rewritten = []
     for line in sdp_text.splitlines():
@@ -304,7 +317,24 @@ async def create_answer(
         await _wait_for_ice_gathering(pc)
 
         local = pc.localDescription
-        if local is None or "a=candidate:" not in local.sdp:
+        if local is None:
+            raise RuntimeError("Failed to generate local WebRTC session description.")
+
+        answer_sdp = local.sdp
+        if "a=candidate:" not in answer_sdp:
+            candidate_lines = []
+            for t in pc.getTransceivers():
+                receiver = getattr(t, "receiver", None)
+                transport = getattr(receiver, "transport", None)
+                underlying = getattr(transport, "_transport", None)
+                gatherer = getattr(underlying, "iceGatherer", None)
+                if gatherer:
+                    for c in gatherer.getLocalCandidates():
+                        candidate_lines.append(f"a=candidate:{candidate_to_sdp(c)}")
+            if candidate_lines:
+                answer_sdp = answer_sdp.strip() + "\r\n" + "\r\n".join(candidate_lines) + "\r\n"
+
+        if "a=candidate:" not in answer_sdp:
             raise RuntimeError(
                 "Server gathered no ICE candidates. Check network/firewall and "
                 "VOICECHAT_ICE_SERVERS configuration."
@@ -313,9 +343,9 @@ async def create_answer(
         logger.info(
             "Returning WebRTC answer (ICE state=%s, candidate lines=%d)",
             pc.iceGatheringState,
-            sum(line.startswith("a=candidate:") for line in local.sdp.splitlines()),
+            sum(line.startswith("a=candidate:") for line in answer_sdp.splitlines()),
         )
-        return {"sdp": _rewrite_advertised_candidates(local.sdp, client_host=client_host), "type": local.type}
+        return {"sdp": _rewrite_advertised_candidates(answer_sdp, client_host=client_host), "type": local.type}
     except Exception:
         tts.remove_listener(tts_track)
         _peer_connections.discard(pc)

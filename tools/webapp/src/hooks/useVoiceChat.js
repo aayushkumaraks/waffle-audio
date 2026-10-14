@@ -9,7 +9,7 @@ const MAX_RECORDING_MS = 60000
 const LIVE_POLL_MS = 700
 const ICE_GATHERING_TIMEOUT_MS = 15000
 const API_STORAGE_KEY = 'waffle.apiUrl'
-const DEFAULT_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }]
+const DEFAULT_ICE_SERVERS = []
 
 function defaultApiUrl() {
   const configured = import.meta.env.VITE_API_URL
@@ -49,30 +49,42 @@ function getIceServers() {
   return DEFAULT_ICE_SERVERS
 }
 
-function waitForIceGathering(peer, timeoutMs = ICE_GATHERING_TIMEOUT_MS) {
-  if (peer.iceGatheringState === 'complete') return Promise.resolve()
+function waitForIceGathering(peer, timeoutMs = 3000) {
+  if (peer.iceGatheringState === 'complete') return Promise.resolve([])
 
-  return new Promise((resolve, reject) => {
-    const timeout = window.setTimeout(() => {
-      cleanup()
-      reject(new Error(`Timed out gathering browser ICE candidates (state: ${peer.iceGatheringState}).`))
-    }, timeoutMs)
-
-    const onStateChange = () => {
-      if (peer.iceGatheringState === 'complete') {
-        cleanup()
-        resolve()
-      }
-    }
+  return new Promise((resolve) => {
+    const candidates = []
+    let timer
 
     const cleanup = () => {
-      window.clearTimeout(timeout)
+      if (timer) clearTimeout(timer)
+      peer.removeEventListener('icecandidate', onCandidate)
       peer.removeEventListener('icegatheringstatechange', onStateChange)
     }
 
+    const finish = () => {
+      cleanup()
+      resolve(candidates)
+    }
+
+    const onCandidate = (event) => {
+      if (event.candidate) {
+        candidates.push(event.candidate)
+      } else {
+        finish()
+      }
+    }
+
+    const onStateChange = () => {
+      if (peer.iceGatheringState === 'complete') {
+        finish()
+      }
+    }
+
+    peer.addEventListener('icecandidate', onCandidate)
     peer.addEventListener('icegatheringstatechange', onStateChange)
-    // Close the race where gathering completed as the listener was attached.
-    onStateChange()
+
+    timer = setTimeout(finish, timeoutMs)
   })
 }
 
@@ -485,14 +497,18 @@ export function useVoiceChat() {
 
       const offer = await peer.createOffer()
       await peer.setLocalDescription(offer)
-      await waitForIceGathering(peer)
+      const gatheredCandidates = await waitForIceGathering(peer)
 
-      const offerSdp = peer.localDescription?.sdp || ''
+      let offerSdp = peer.localDescription?.sdp || ''
+      if (gatheredCandidates.length > 0 && !offerSdp.includes('a=candidate:')) {
+        const candidateLines = gatheredCandidates
+          .map(c => `a=${c.candidate.trim()}`)
+          .join('\r\n')
+        offerSdp = offerSdp.trim() + '\r\n' + candidateLines + '\r\n'
+      }
+
       const browserCandidateCount = countIceCandidates(offerSdp)
       console.info('[WebRTC] Browser ICE candidates gathered:', browserCandidateCount)
-      if (!browserCandidateCount) {
-        throw new Error('The browser gathered no ICE candidates. Check browser network permissions and ICE server configuration.')
-      }
 
       const response = await fetch(api.root() + '/webrtc/offer', {
         method: 'POST',
