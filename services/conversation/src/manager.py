@@ -5,6 +5,9 @@ import re
 import queue
 import threading
 
+from typing import Callable
+
+from constants import SENTENCE_GATE_GAP_TIMEOUT, SENTENCE_GATE_QUICK_FIRE_TIMEOUT
 from models import Message
 
 from services.stt.src import STTListener, STTService
@@ -39,16 +42,24 @@ class ConversationManager(LLMListener):
         stt: STTService,
         llm: LLMService,
         tts: TTSService,
+        on_user_turn: Callable[[str], None] | None = None,
+        gap_timeout: float = SENTENCE_GATE_GAP_TIMEOUT,
+        quick_fire_timeout: float = SENTENCE_GATE_QUICK_FIRE_TIMEOUT,
     ) -> None:
         self._stt = stt
         self._llm = llm
         self._tts = tts
+        self._on_user_turn = on_user_turn
 
         self._stt_listener = _STTListenerAdapter(self)
 
         self._history: list[Message] = []
 
-        self._gate = SentenceGate(callback=self._trigger_llm)
+        self._gate = SentenceGate(
+            callback=self._trigger_llm,
+            gap_timeout=gap_timeout,
+            quick_fire_timeout=quick_fire_timeout,
+        )
 
         self._started = False
         self._pending_generation = False
@@ -111,9 +122,11 @@ class ConversationManager(LLMListener):
 
     def _handle_transcript_started(self, text: str) -> None:
         logger.debug("Speech started: %s", text)
+        self._gate.notify_speech_active()
 
     def _handle_transcript_updated(self, text: str) -> None:
         logger.debug("Transcript updated: %s", text)
+        self._gate.notify_speech_active()
 
     def _handle_transcript_completed(self, text: str) -> None:
         logger.info("Transcript completed: %s", text)
@@ -134,6 +147,12 @@ class ConversationManager(LLMListener):
                 content=text,
             )
         )
+
+        if self._on_user_turn is not None:
+            try:
+                self._on_user_turn(text)
+            except Exception as exc:
+                logger.warning("Error in on_user_turn callback: %s", exc)
 
         logger.debug(
             "Conversation history now contains %d message(s).",

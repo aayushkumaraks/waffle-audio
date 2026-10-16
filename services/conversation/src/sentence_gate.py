@@ -102,14 +102,14 @@ class SentenceGate:
     responses.
     """
 
-    _COMPLETE_THRESHOLD = 0.5  # score at/above which quick_fire_timeout is used
+    _COMPLETE_THRESHOLD = 0.7  # score at/above which quick_fire_timeout is used
 
     def __init__(
         self,
         callback: Callable[[str], None],
         *,
-        gap_timeout: float = 1.2,
-        quick_fire_timeout: float = 0.4,
+        gap_timeout: float = 2.0,
+        quick_fire_timeout: float = 0.8,
         history_size: int = 8,
     ) -> None:
         self._callback = callback
@@ -127,10 +127,26 @@ class SentenceGate:
     # Public API
     # ------------------------------------------------------------------
 
+    def notify_speech_active(self) -> None:
+        """Called when new speech is detected or actively streaming.
+
+        Cancels any pending silence timer so the gate never interrupts the
+        user while speech is actively in progress.
+        """
+        with self._lock:
+            if self._pending_timer is not None:
+                self._pending_timer.cancel()
+                self._pending_timer = None
+
     def submit(self, text: str) -> None:
         """Append a new fragment and reset the silence timer."""
+        text = text.strip()
         with self._lock:
-            self._buffer.append(text)
+            if text:
+                self._buffer.append(text)
+            if not self._buffer:
+                return
+
             accumulated = " ".join(self._buffer)
 
             if self._pending_timer is not None:
@@ -156,6 +172,9 @@ class SentenceGate:
 
     def _fire(self) -> None:
         with self._lock:
+            if not self._buffer:
+                self._pending_timer = None
+                return
             text = " ".join(self._buffer)
             self._buffer.clear()
             self._pending_timer = None

@@ -1,6 +1,36 @@
 # Running the app
 
-## Start Ollama
+## One-Click Start (CLI App)
+
+The fastest way to install dependencies, verify models, and start the voice assistant:
+
+```bash
+./run.sh
+```
+
+On Windows:
+```cmd
+run.bat
+```
+
+Or start the CLI app directly with `uv`:
+
+```bash
+uv run python -m services.conversation.cli
+```
+
+### CLI Interface Features
+- **Top-Right Status Badge**: Always shows `● READY`, `🎤 LISTENING`, or `⠋ PROCESSING`.
+- **Real-Time Conversation**: Live speech transcription and streaming voice responses synchronized with audio playback.
+- **Dynamic Auto-Scrolling**: Keeps dialogue panel anchored at the bottom as turns arrive, with an indicator for scrolled lines.
+- **Multi-Line Speech Accumulation**: Continuous user speech spanning multiple segments is joined into a single coherent prompt.
+- **ASCII Animations**: Dynamic header waveforms and processing spinners.
+- **Zero Log Clutter**: All engine chatter is written to `logs/voicechat.log`.
+- **Verbose Latency Profiling**: Pass `--verbose` (e.g. `./run.sh --verbose`) to display real-time latency timelines and compare with README benchmarks.
+
+---
+
+## Start Ollama (Manual)
 
 The LLM service requires Ollama to be running before the app starts.
 
@@ -96,7 +126,7 @@ VOICECHAT_CORS_ALLOW_ORIGINS=http://localhost:8080,http://127.0.0.1:5500 uv run 
 | TTS voice      | `services/tts/src/tts_service.py`            | af_sarah             |
 | TTS speed      | `services/tts/src/tts_service.py`            | 1.0                  |
 | STT language   | `services/stt/src/stt_service.py`            | en                   |
-| Silence gate   | `services/conversation/src/sentence_gate.py` | 2.0 s gap, 0.4 s quick-fire |
+| Silence gate   | `constants.py` (`VOICECHAT_GAP_TIMEOUT`, `VOICECHAT_QUICK_FIRE_TIMEOUT`) | 2.0 s gap, 0.8 s quick-fire |
 
 ---
 

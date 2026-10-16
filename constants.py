@@ -22,12 +22,19 @@ def _int_from_env(name: str, default: int) -> int:
 # Ollama / LLM
 # ---------------------------------------------------------------------------
 
-OLLAMA_BASE_URL: str = "http://172.19.96.1:11434"
-OLLAMA_MODEL: str = "qwen3.5:4b"
+OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://172.19.96.1:11434") # WSL to HOST
+OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen3.5:4b")
 # Keep the model resident in memory so turns never pay a cold-load penalty.
 OLLAMA_KEEP_ALIVE: str = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
 # Hard cap on reply length (replies are spoken aloud, 2-3 short sentences).
 OLLAMA_NUM_PREDICT: int = _int_from_env("OLLAMA_NUM_PREDICT", 160)
+
+# ---------------------------------------------------------------------------
+# Sentence Gate (silence interval before LLM invocation)
+# ---------------------------------------------------------------------------
+
+SENTENCE_GATE_GAP_TIMEOUT: float = float(os.getenv("VOICECHAT_GAP_TIMEOUT", "2.0"))
+SENTENCE_GATE_QUICK_FIRE_TIMEOUT: float = float(os.getenv("VOICECHAT_QUICK_FIRE_TIMEOUT", "0.8"))
 
 # ---------------------------------------------------------------------------
 # Kokoro TTS -- local model files

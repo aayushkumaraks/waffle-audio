@@ -90,30 +90,34 @@ Microphone --> VAD (Silero) --> STT (Moonshine) --> LLM (Ollama) --> TTS (Kokoro
 - Voice-friendly LLM prompt: the model is instructed to reply in 2-3 short plain
   sentences with no emojis or markdown
 
-## Try it in 30 seconds
+## Quick Start (One-Click)
 
-Make sure Ollama is running with the model pulled, then start the voice CLI:
+Run the one-click install & run script from the project root:
 
+```bash
+./run.sh
+```
+
+On Windows:
+```cmd
+run.bat
+```
+
+Or run directly with `uv`:
 ```bash
 uv run python -m services.conversation.cli
 ```
 
-Speak naturally and press `Ctrl+C` to quit. You will see what it heard and what it says:
+### CLI Interface Features
 
-```text
-You: Hello, can you hear me?
-Waffle: Hello! Yes, I am listening to you clearly. How may I assist you today?
-```
-
-The first run downloads the voice models (a Hugging Face token is requested only if a
-download is needed; press Enter to continue without one). Later runs start from the
-local cache with no network access.
-
-Prefer a log-style view that also prints the full history on exit?
-
-```bash
-uv run python -m services.conversation.app
-```
+- **Top-Right Status Badge**: Always shows whether the assistant is `● READY`, `🎤 LISTENING`, or `⠋ PROCESSING`.
+- **Real-Time Conversation**: Live transcription appears as you speak, and assistant responses stream word-by-word synchronously as the audio plays.
+- **Dynamic Auto-Scrolling**: The conversation window automatically scrolls down so newest utterances and live responses are always visible, indicating hidden lines with a border subtitle.
+- **Multi-Line Speech Accumulation**: Continuous speech across multiple Moonshine segments is seamlessly accumulated into a single turn without fragmentation.
+- **ASCII Animations & Loaders**: Animated audio waveforms in the header and visual spinners/loaders during speech synthesis and model inference.
+- **No Log Spam**: All backend and driver logs are cleanly redirected to `logs/voicechat.log`, keeping the terminal UI pristine.
+- **Verbose Latency Profiling**: Pass `--verbose` (e.g. `./run.sh --verbose`) to show a real-time pipeline latency timeline in the UI and compare against README benchmarks.
+- **Conversation Summary**: Full conversation history and benchmark timeline are displayed when you exit with `Ctrl+C`.
 
 ### Tuning
 
@@ -122,6 +126,8 @@ uv run python -m services.conversation.app
 | `OLLAMA_KEEP_ALIVE` | `30m` | How long Ollama keeps the model in memory |
 | `OLLAMA_NUM_PREDICT` | `160` | Maximum tokens per reply |
 | `VOICECHAT_TTS_BACKEND` | `pocket` | `pocket` or `kokoro` |
+| `VOICECHAT_GAP_TIMEOUT` | `2.0` | Seconds of silence before finalizing user turn |
+| `VOICECHAT_QUICK_FIRE_TIMEOUT` | `0.8` | Silence timeout when sentence ends with terminal punctuation |
 
 ## Project structure
 
@@ -131,6 +137,7 @@ services/
     src/
       manager.py          ConversationManager
       sentence_gate.py    Adaptive silence-gap gate
+      ui.py               Rich terminal UI controller & renderer
     cli.py                Live microphone voice assistant
   stt/            Moonshine streaming transcription wrapper
   llm/            Ollama HTTP provider + queue-based service

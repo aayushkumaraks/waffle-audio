@@ -1,9 +1,11 @@
 """Public exports for the Audio Player service package."""
 
 from .audio_player import (
-    AudioPlayer
+    AudioPlaybackListener,
+    AudioPlayer,
 )
 
 __all__ = [
-    "AudioPlayer"
+    "AudioPlaybackListener",
+    "AudioPlayer",
 ]
