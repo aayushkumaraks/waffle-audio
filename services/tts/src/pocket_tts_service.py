@@ -12,13 +12,17 @@ os.environ.setdefault("HF_HOME", str(Path(POCKET_TTS_CACHE_DIR).resolve()))
 
 from pocket_tts import TTSModel
 from .base_tts_service import BaseTTSService
+from .hf_cache import load_local_first
 from .tts_types import AudioBuffer, TTSConfig
 class PocketTTSService(BaseTTSService):
     def __init__(self, config: TTSConfig) -> None:
         super().__init__(config); self._engine: TTSModel | None = None; self._voice_state: object | None = None
     def _load_engine(self) -> None:
-        engine = TTSModel.load_model(language=self._config.language or POCKET_TTS_DEFAULT_LANGUAGE, quantize=self._config.quantize)
-        self._voice_state = engine.get_state_for_audio_prompt(self._config.voice or POCKET_TTS_DEFAULT_VOICE); self._engine = engine
+        def load() -> tuple[TTSModel, object]:
+            engine = TTSModel.load_model(language=self._config.language or POCKET_TTS_DEFAULT_LANGUAGE, quantize=self._config.quantize)
+            return engine, engine.get_state_for_audio_prompt(self._config.voice or POCKET_TTS_DEFAULT_VOICE)
+        # Local cache first (no network); contact Hugging Face only if data is missing.
+        engine, self._voice_state = load_local_first(load); self._engine = engine
     def _unload_engine(self) -> None:
         self._engine = None; self._voice_state = None
     def _stream_audio(self, text: str) -> tuple[Iterator[AudioBuffer], int]:
