@@ -90,30 +90,31 @@ Microphone --> VAD (Silero) --> STT (Moonshine) --> LLM (Ollama) --> TTS (Kokoro
 - Voice-friendly LLM prompt: the model is instructed to reply in 2-3 short plain
   sentences with no emojis or markdown
 
-## Try it in 30 seconds
+## Quick Start (One-Click)
 
-Make sure Ollama is running with the model pulled, then start the voice CLI:
+Run the one-click install & run script from the project root:
 
+```bash
+./run.sh
+```
+
+On Windows:
+```cmd
+run.bat
+```
+
+Or run directly with `uv`:
 ```bash
 uv run python -m services.conversation.cli
 ```
 
-Speak naturally and press `Ctrl+C` to quit. You will see what it heard and what it says:
+### CLI Interface Features
 
-```text
-You: Hello, can you hear me?
-Waffle: Hello! Yes, I am listening to you clearly. How may I assist you today?
-```
-
-The first run downloads the voice models (a Hugging Face token is requested only if a
-download is needed; press Enter to continue without one). Later runs start from the
-local cache with no network access.
-
-Prefer a log-style view that also prints the full history on exit?
-
-```bash
-uv run python -m services.conversation.app
-```
+- **Top-Right Status Badge**: Always shows whether the assistant is `● READY`, `🎤 LISTENING`, or `⠋ PROCESSING`.
+- **Real-Time Conversation**: Live transcription appears as you speak, and assistant responses stream word-by-word.
+- **ASCII Animations & Loaders**: Animated audio waveforms in the header and visual spinners/loaders during speech synthesis and model inference.
+- **No Log Spam**: All backend and driver logs are cleanly redirected to `logs/voicechat.log`, keeping the terminal UI pristine.
+- **Conversation Summary**: Full conversation history is neatly formatted and displayed when you stop the session with `Ctrl+C`.
 
 ### Tuning
 

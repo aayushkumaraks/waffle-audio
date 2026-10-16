@@ -1,6 +1,33 @@
 # Running the app
 
-## Start Ollama
+## One-Click Start (CLI App)
+
+The fastest way to install dependencies, verify models, and start the voice assistant:
+
+```bash
+./run.sh
+```
+
+On Windows:
+```cmd
+run.bat
+```
+
+Or start the CLI app directly with `uv`:
+
+```bash
+uv run python -m services.conversation.cli
+```
+
+### CLI Interface Features
+- **Top-Right Status Badge**: Always shows `● READY`, `🎤 LISTENING`, or `⠋ PROCESSING`.
+- **Real-Time Conversation**: Live speech transcription and streaming voice responses.
+- **ASCII Animations**: Dynamic header waveforms and processing spinners.
+- **Zero Log Clutter**: All engine chatter is written to `logs/voicechat.log`.
+
+---
+
+## Start Ollama (Manual)
 
 The LLM service requires Ollama to be running before the app starts.
 
