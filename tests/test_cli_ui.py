@@ -96,6 +96,33 @@ class ConversationUITests(unittest.TestCase):
             self.assertIsNotNone(layout["footer"])
             self.assertIsNotNone(layout["header"]["status_box"])
 
+    def test_verbose_layout_and_benchmark_metrics(self):
+        verbose_ui = ConversationUI(verbose=True)
+        layout = verbose_ui.render(anim_frame=0)
+        self.assertIsNotNone(layout["benchmark"])
+
+        verbose_ui.on_transcript_started("How fast are you?")
+        verbose_ui.on_transcript_completed("How fast are you?")
+        verbose_ui.on_generation_started()
+        verbose_ui.on_generation_updated("I am")
+        verbose_ui.on_generation_completed("I am very fast.")
+        verbose_ui.on_playback_started()
+        verbose_ui.on_playback_text_updated("I am very fast.")
+        verbose_ui.on_playback_completed()
+
+        bm = verbose_ui.latest_benchmark
+        self.assertIsNotNone(bm)
+        self.assertIn("gate_dur", bm)
+        self.assertIn("first_token_dur", bm)
+        self.assertIn("full_llm_dur", bm)
+        self.assertIn("tts_first_dur", bm)
+        self.assertIn("e2e_dur", bm)
+        self.assertGreaterEqual(bm["e2e_dur"], 0.0)
+
+        # Re-render with populated benchmark
+        layout_with_bm = verbose_ui.render(anim_frame=1)
+        self.assertIsNotNone(layout_with_bm["benchmark"])
+
 
 class AudioPlayerPlaybackTests(unittest.TestCase):
     def test_audio_chunk_queuing_with_text(self):

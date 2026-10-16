@@ -111,10 +111,11 @@ uv run python -m services.conversation.cli
 ### CLI Interface Features
 
 - **Top-Right Status Badge**: Always shows whether the assistant is `● READY`, `🎤 LISTENING`, or `⠋ PROCESSING`.
-- **Real-Time Conversation**: Live transcription appears as you speak, and assistant responses stream word-by-word.
+- **Real-Time Conversation**: Live transcription appears as you speak, and assistant responses stream word-by-word synchronously as the audio plays.
 - **ASCII Animations & Loaders**: Animated audio waveforms in the header and visual spinners/loaders during speech synthesis and model inference.
 - **No Log Spam**: All backend and driver logs are cleanly redirected to `logs/voicechat.log`, keeping the terminal UI pristine.
-- **Conversation Summary**: Full conversation history is neatly formatted and displayed when you stop the session with `Ctrl+C`.
+- **Verbose Latency Profiling**: Pass `--verbose` (e.g. `./run.sh --verbose`) to show a real-time pipeline latency timeline in the UI and compare against README benchmarks.
+- **Conversation Summary**: Full conversation history and benchmark timeline are displayed when you exit with `Ctrl+C`.
 
 ### Tuning
 

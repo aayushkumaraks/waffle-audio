@@ -78,6 +78,12 @@ else
     echo -e "${YELLOW}Please ensure Ollama is installed and running at ${OLLAMA_BASE_URL}.${RESET}"
 fi
 
+for arg in "$@"; do
+    if [[ "$arg" == "--verbose" || "$arg" == "-v" ]]; then
+        echo -e "${CYAN}[INFO]${RESET} Verbose latency profiling & README benchmark comparison enabled."
+    fi
+done
+
 # Launch the CLI application
 echo -e "\n${BOLD}${GREEN}Starting Waffle Audio CLI...${RESET}\n"
 exec uv run python -m services.conversation.cli "$@"

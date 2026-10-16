@@ -138,32 +138,11 @@ class AudioPlayer(TTSListener):
                     self._dispatch_playback_started()
 
                     text = text.strip()
-                    words = text.split() if text else []
-                    num_words = len(words)
-                    total_samples = len(audio)
-                    # ~50ms slices to pace word updates with playback
-                    slice_samples = max(512, int(sample_rate * 0.05))
-                    prev_words_shown = 0
-                    prefix = (accumulated_text + " ").lstrip() if accumulated_text else ""
-
-                    for offset in range(0, total_samples, slice_samples):
-                        if self._shutdown.is_set():
-                            break
-                        slice_audio = audio[offset : offset + slice_samples]
-                        stream.write(np.column_stack((slice_audio, slice_audio)))
-
-                        if num_words > 0:
-                            played = offset + len(slice_audio)
-                            fraction = min(1.0, played / total_samples)
-                            words_shown = min(num_words, int(fraction * num_words) + 1)
-                            if words_shown > prev_words_shown:
-                                prev_words_shown = words_shown
-                                partial = " ".join(words[:words_shown])
-                                self._dispatch_playback_text_updated(prefix + partial)
-
                     if text:
                         accumulated_text = (accumulated_text + " " + text).strip()
                         self._dispatch_playback_text_updated(accumulated_text)
+
+                    stream.write(np.column_stack((audio, audio)))
 
                 except Exception:
                     logger.exception("Audio playback failed.")

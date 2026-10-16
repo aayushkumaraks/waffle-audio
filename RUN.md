@@ -24,6 +24,7 @@ uv run python -m services.conversation.cli
 - **Real-Time Conversation**: Live speech transcription and streaming voice responses.
 - **ASCII Animations**: Dynamic header waveforms and processing spinners.
 - **Zero Log Clutter**: All engine chatter is written to `logs/voicechat.log`.
+- **Verbose Latency Profiling**: Pass `--verbose` (e.g. `./run.sh --verbose`) to display real-time latency timelines and compare with README benchmarks.
 
 ---
 

@@ -45,10 +45,10 @@ class BaseTTSService(ABC):
                 with self._engine_lock:
                     self._dispatch_synthesis_started()
                     chunks, rate = self._stream_audio(item)
-                    chunk_list = list(chunks)
-                    if chunk_list:
-                        combined = np.concatenate(chunk_list).astype(np.float32)
-                        self._dispatch_audio_chunk(combined, rate, text=item)
+                    first = True
+                    for audio in chunks:
+                        self._dispatch_audio_chunk(audio, rate, text=item if first else "")
+                        first = False
                     self._dispatch_synthesis_completed()
             except Exception:
                 logger.exception("Speech synthesis failed.")

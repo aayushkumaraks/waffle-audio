@@ -1,6 +1,7 @@
-"""Interactive voice assistant CLI with Rich terminal UI and real-time audio pipeline."""
+"""Interactive voice assistant CLI with Rich terminal UI, low-latency audio, and verbose benchmark timeline."""
 from __future__ import annotations
 
+import argparse
 import contextlib
 import logging
 import os
@@ -15,6 +16,13 @@ from rich.live import Live
 
 from services.audio.src import AudioPlayer
 from services.conversation.src import ConversationManager, ConversationUI
+from services.conversation.src.ui import (
+    README_TARGET_E2E,
+    README_TARGET_FIRST_TOKEN,
+    README_TARGET_GATE,
+    README_TARGET_LLM_FULL,
+    README_TARGET_TTS_FIRST,
+)
 from services.llm.src import LLMProvider, LLMProviderConfig, LLMService
 from services.stt.src import AudioQueueFull, STTService
 from services.tts.src import TTSConfig, TTSService
@@ -71,9 +79,18 @@ def _suppress_c_stderr():
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Waffle Audio Voice Assistant CLI")
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Display real-time turn timeline and compare latencies against README benchmarks",
+    )
+    args, _ = parser.parse_known_args()
+
     _setup_logging()
     logger = logging.getLogger(__name__)
-    logger.info("Starting Waffle Audio CLI...")
+    logger.info("Starting Waffle Audio CLI (verbose=%s)...", args.verbose)
 
     stop_event = threading.Event()
 
@@ -84,7 +101,7 @@ def main() -> None:
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, handle_signal)
 
-    ui = ConversationUI()
+    ui = ConversationUI(verbose=args.verbose)
 
     # Initialize audio and conversation services
     stt = STTService()
@@ -159,9 +176,9 @@ def main() -> None:
         player.stop()
 
         # Print clean conversation summary after restoring normal terminal
-        print("\n" + "=" * 60)
+        print("\n" + "=" * 70)
         print("WAFFLE AUDIO — Conversation History")
-        print("=" * 60)
+        print("=" * 70)
         history = ui.history
         if not history:
             print("No conversation messages recorded.")
@@ -169,7 +186,37 @@ def main() -> None:
             for idx, msg in enumerate(history, start=1):
                 role_label = "You" if msg["role"] == "user" else "Waffle"
                 print(f"{idx}. [{role_label}] {msg['text']}")
-        print("=" * 60)
+
+        if args.verbose and ui.benchmarks:
+            print("\n" + "=" * 70)
+            print("LATENCY TIMELINE & README BENCHMARK COMPARISON")
+            print("=" * 70)
+            print(
+                f"README Reference: Warm Turn E2E = {README_TARGET_E2E}s | Cold Start = 6.8s | Before Opt = 3.3s\n"
+            )
+            for i, bm in enumerate(ui.benchmarks, start=1):
+                print(f"Turn #{i}:")
+                print(f"  User       : \"{bm['user_text']}\"")
+                print(f"  Assistant  : \"{bm['assistant_text']}\"")
+                print("  Timeline Breakdown:")
+                print(
+                    f"    1. Sentence Gate      : {bm['gate_dur']:5.2f}s  (Target: {README_TARGET_GATE:4.2f}s  |  Δ {bm['gate_dur'] - README_TARGET_GATE:+.2f}s)"
+                )
+                print(
+                    f"    2. LLM First Token    : {bm['first_token_dur']:5.2f}s  (Target: {README_TARGET_FIRST_TOKEN:4.2f}s  |  Δ {bm['first_token_dur'] - README_TARGET_FIRST_TOKEN:+.2f}s)"
+                )
+                print(
+                    f"    3. LLM Full Reply     : {bm['full_llm_dur']:5.2f}s  (Target: {README_TARGET_LLM_FULL:4.2f}s  |  Δ {bm['full_llm_dur'] - README_TARGET_LLM_FULL:+.2f}s)"
+                )
+                print(
+                    f"    4. TTS First Speech   : {bm['tts_first_dur']:5.2f}s  (Target: {README_TARGET_TTS_FIRST:4.2f}s  |  Δ {bm['tts_first_dur'] - README_TARGET_TTS_FIRST:+.2f}s)"
+                )
+                print(
+                    f"    5. Total E2E Latency  : {bm['e2e_dur']:5.2f}s  (Target: {README_TARGET_E2E:4.2f}s  |  Δ {bm['e2e_dur'] - README_TARGET_E2E:+.2f}s)"
+                )
+                print(f"    Total Turn Duration   : {bm['total_dur']:5.2f}s\n")
+
+        print("=" * 70)
         print("Waffle Audio stopped cleanly.\n")
 
 
