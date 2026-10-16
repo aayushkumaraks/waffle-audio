@@ -2,6 +2,9 @@
 
 Follow these steps once before running the app for the first time.
 
+> [!TIP]
+> After setup, you can launch the voice assistant with one click using `./run.sh` (or `run.bat` on Windows).
+
 ## 1. Prerequisites
 
 | Requirement | Minimum version | Notes                                                   |
@@ -160,4 +163,4 @@ If the device list is empty:
 
 ---
 
-Setup is complete. See [RUN.md](RUN.md) to start the app.
+Setup is complete. See [RUN.md](RUN.md) to start the app, or launch immediately with `./run.sh` (`run.bat` on Windows).

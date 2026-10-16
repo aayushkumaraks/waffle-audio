@@ -112,6 +112,8 @@ uv run python -m services.conversation.cli
 
 - **Top-Right Status Badge**: Always shows whether the assistant is `● READY`, `🎤 LISTENING`, or `⠋ PROCESSING`.
 - **Real-Time Conversation**: Live transcription appears as you speak, and assistant responses stream word-by-word synchronously as the audio plays.
+- **Dynamic Auto-Scrolling**: The conversation window automatically scrolls down so newest utterances and live responses are always visible, indicating hidden lines with a border subtitle.
+- **Multi-Line Speech Accumulation**: Continuous speech across multiple Moonshine segments is seamlessly accumulated into a single turn without fragmentation.
 - **ASCII Animations & Loaders**: Animated audio waveforms in the header and visual spinners/loaders during speech synthesis and model inference.
 - **No Log Spam**: All backend and driver logs are cleanly redirected to `logs/voicechat.log`, keeping the terminal UI pristine.
 - **Verbose Latency Profiling**: Pass `--verbose` (e.g. `./run.sh --verbose`) to show a real-time pipeline latency timeline in the UI and compare against README benchmarks.
@@ -124,6 +126,8 @@ uv run python -m services.conversation.cli
 | `OLLAMA_KEEP_ALIVE` | `30m` | How long Ollama keeps the model in memory |
 | `OLLAMA_NUM_PREDICT` | `160` | Maximum tokens per reply |
 | `VOICECHAT_TTS_BACKEND` | `pocket` | `pocket` or `kokoro` |
+| `VOICECHAT_GAP_TIMEOUT` | `2.0` | Seconds of silence before finalizing user turn |
+| `VOICECHAT_QUICK_FIRE_TIMEOUT` | `0.8` | Silence timeout when sentence ends with terminal punctuation |
 
 ## Project structure
 
@@ -133,6 +137,7 @@ services/
     src/
       manager.py          ConversationManager
       sentence_gate.py    Adaptive silence-gap gate
+      ui.py               Rich terminal UI controller & renderer
     cli.py                Live microphone voice assistant
   stt/            Moonshine streaming transcription wrapper
   llm/            Ollama HTTP provider + queue-based service
