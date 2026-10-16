@@ -3,6 +3,7 @@ import numpy as np
 
 from rich.console import Console
 from services.audio.src import AudioPlaybackListener, AudioPlayer
+from services.conversation.src.sentence_gate import SentenceGate
 from services.conversation.src.ui import ConversationUI
 
 
@@ -224,5 +225,46 @@ class AudioPlayerPlaybackTests(unittest.TestCase):
         self.assertEqual(item[2], "Hello world")
 
 
+class SentenceGateTests(unittest.TestCase):
+    def test_notify_speech_active_prevents_premature_fire(self):
+        calls = []
+        gate = SentenceGate(callback=calls.append, gap_timeout=0.1, quick_fire_timeout=0.05)
+        # Line 1 arrives
+        gate.submit("Hello I was thinking of")
+        # User is actively speaking line 2 before silence fires
+        gate.notify_speech_active()
+        import time
+        time.sleep(0.12)
+        # Gate must NOT have fired while speech is active
+        self.assertEqual(calls, [])
+
+        # User finishes line 2
+        gate.submit("how neural networks work")
+        time.sleep(0.15)
+        # Gate fires once with both lines joined
+        self.assertEqual(calls, ["Hello I was thinking of how neural networks work"])
+
+    def test_fragments_within_interval_accumulate_single_llm_call(self):
+        calls = []
+        gate = SentenceGate(callback=calls.append, gap_timeout=0.15, quick_fire_timeout=0.08)
+        import time
+        gate.submit("Sentence one.")
+        time.sleep(0.04)
+        gate.submit("Sentence two.")
+        time.sleep(0.04)
+        gate.submit("Sentence three.")
+        time.sleep(0.2)
+        self.assertEqual(calls, ["Sentence one. Sentence two. Sentence three."])
+        self.assertEqual(len(calls), 1)
+
+    def test_incomplete_eight_words_does_not_quick_fire(self):
+        calls = []
+        gate = SentenceGate(callback=calls.append, gap_timeout=1.5, quick_fire_timeout=0.4)
+        delay = gate._compute_delay("one two three four five six seven eight")
+        # Score is 0.50, which is below 0.70 threshold; delay must NOT be quick_fire_timeout (0.4)
+        self.assertGreaterEqual(delay, 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()
+

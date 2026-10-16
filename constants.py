@@ -30,6 +30,13 @@ OLLAMA_KEEP_ALIVE: str = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
 OLLAMA_NUM_PREDICT: int = _int_from_env("OLLAMA_NUM_PREDICT", 160)
 
 # ---------------------------------------------------------------------------
+# Sentence Gate (silence interval before LLM invocation)
+# ---------------------------------------------------------------------------
+
+SENTENCE_GATE_GAP_TIMEOUT: float = float(os.getenv("VOICECHAT_GAP_TIMEOUT", "2.0"))
+SENTENCE_GATE_QUICK_FIRE_TIMEOUT: float = float(os.getenv("VOICECHAT_QUICK_FIRE_TIMEOUT", "0.8"))
+
+# ---------------------------------------------------------------------------
 # Kokoro TTS -- local model files
 # ---------------------------------------------------------------------------
 
