@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import queue
 import threading
 
@@ -51,6 +52,7 @@ class ConversationManager(LLMListener):
 
         self._started = False
         self._pending_generation = False
+        self._spoken_chars = 0
         self._state_lock = threading.Lock()
 
     def start(self) -> None:
@@ -151,11 +153,42 @@ class ConversationManager(LLMListener):
     # LLM Event Handlers
     # ------------------------------------------------------------------
 
+    # A sentence ends at . ! or ? (plus optional closing quotes) followed by
+    # whitespace; requiring the following space avoids splitting on decimals.
+    _SENTENCE_END = re.compile(r"[.!?][\"')\]]*\s")
+    # Avoid sending tiny fragments (e.g. "Sure.") to TTS on their own.
+    _MIN_SPEECH_CHARS = 30
+
     def on_generation_started(self) -> None:
         logger.debug("LLM generation started.")
+        self._spoken_chars = 0
 
     def on_generation_updated(self, text: str) -> None:
         logger.debug("LLM generation updated.")
+
+        with self._state_lock:
+            if not self._pending_generation:
+                return
+
+        boundary = None
+        for match in self._SENTENCE_END.finditer(text, self._spoken_chars):
+            boundary = match.end()
+
+        if boundary is None:
+            return
+
+        chunk = text[self._spoken_chars:boundary].strip()
+        if len(chunk) < self._MIN_SPEECH_CHARS:
+            return
+
+        self._spoken_chars = boundary
+        self._speak(chunk)
+
+    def _speak(self, text: str) -> None:
+        try:
+            self._tts.speak(text)
+        except Exception:
+            logger.exception("Could not queue speech.")
 
     def on_generation_completed(self, text: str) -> None:
         with self._state_lock:
@@ -168,7 +201,10 @@ class ConversationManager(LLMListener):
 
         logger.info("LLM generation completed.")
 
-        self._tts.speak(text)
+        remainder = text[self._spoken_chars:].strip()
+        self._spoken_chars = 0
+        if remainder:
+            self._speak(remainder)
 
         self._history.append(
             Message(

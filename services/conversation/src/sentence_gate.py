@@ -102,13 +102,13 @@ class SentenceGate:
     responses.
     """
 
-    _COMPLETE_THRESHOLD = 0.7  # score above which quick_fire_timeout is used
+    _COMPLETE_THRESHOLD = 0.5  # score at/above which quick_fire_timeout is used
 
     def __init__(
         self,
         callback: Callable[[str], None],
         *,
-        gap_timeout: float = 2.0,
+        gap_timeout: float = 1.2,
         quick_fire_timeout: float = 0.4,
         history_size: int = 8,
     ) -> None:

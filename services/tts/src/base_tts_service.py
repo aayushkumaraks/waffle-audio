@@ -46,7 +46,9 @@ class BaseTTSService(ABC):
                     self._dispatch_synthesis_started(); chunks, rate = self._stream_audio(item)
                     for audio in chunks: self._dispatch_audio_chunk(audio, rate)
                     self._dispatch_synthesis_completed()
-            except Exception: logger.exception("Speech synthesis failed.")
+            except Exception:
+                logger.exception("Speech synthesis failed.")
+                self._dispatch_synthesis_completed()
     def _dispatch_synthesis_started(self) -> None:
         for listener in tuple(self._listeners): listener.on_synthesis_started()
     def _dispatch_audio_chunk(self, audio: AudioBuffer, rate: int) -> None:

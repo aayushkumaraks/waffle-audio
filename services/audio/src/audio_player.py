@@ -29,11 +29,20 @@ class AudioPlayer(TTSListener):
 
         self._shutdown = threading.Event()
         self._playing = threading.Event()
+        self._synthesizing = threading.Event()
 
     @property
     def is_playing(self) -> bool:
-        """True while audio is actively being played back."""
-        return self._playing.is_set()
+        """True while audio is actively being played back or still pending.
+
+        Stays true across the gaps between streamed sentences so the speaker
+        output of one sentence is not picked up as user speech.
+        """
+        return (
+            self._playing.is_set()
+            or self._synthesizing.is_set()
+            or not self._playback_queue.empty()
+        )
 
     def start(self) -> None:
         self._shutdown.clear()
@@ -57,7 +66,7 @@ class AudioPlayer(TTSListener):
         self._worker_thread = None
 
     def on_synthesis_started(self) -> None:
-        pass
+        self._synthesizing.set()
 
     def on_audio_chunk(
         self,
@@ -67,7 +76,7 @@ class AudioPlayer(TTSListener):
         self._playback_queue.put_nowait((audio, sample_rate))
 
     def on_synthesis_completed(self) -> None:
-        pass
+        self._synthesizing.clear()
 
     def _playback_worker(self) -> None:
         stream: sd.OutputStream | None = None

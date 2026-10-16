@@ -1,4 +1,6 @@
 import json
+import logging
+import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Sequence
@@ -6,7 +8,9 @@ from typing import Any, Sequence
 import httpx
 
 from models import Message
-from constants import OLLAMA_BASE_URL, OLLAMA_MODEL
+from constants import OLLAMA_BASE_URL, OLLAMA_KEEP_ALIVE, OLLAMA_MODEL, OLLAMA_NUM_PREDICT
+
+logger = logging.getLogger(__name__)
 
 
 class LLMCallbacks(ABC):
@@ -59,6 +63,27 @@ class LLMProvider:
             raise LLMProviderError(
                 f"Unable to connect to Ollama at {self._config.base_url}."
             ) from exc
+
+        # Load the model into memory now (in the background) so the first
+        # user turn does not pay the cold-start cost.
+        threading.Thread(
+            target=self._warm_up, name="llm-warmup", daemon=True
+        ).start()
+
+    def _warm_up(self) -> None:
+        try:
+            self._client.post(
+                "/api/chat",
+                json={
+                    "model": self._config.model,
+                    "messages": [],
+                    "keep_alive": OLLAMA_KEEP_ALIVE,
+                },
+                timeout=httpx.Timeout(120.0),
+            )
+            logger.info("LLM model warmed up.")
+        except httpx.HTTPError:
+            logger.debug("LLM warm-up failed.", exc_info=True)
 
     def stop(self) -> None:
         """Release provider resources."""
@@ -143,4 +168,6 @@ class LLMProvider:
             ],
             "stream": True,
             "think": False,
+            "keep_alive": OLLAMA_KEEP_ALIVE,
+            "options": {"num_predict": OLLAMA_NUM_PREDICT},
         }
