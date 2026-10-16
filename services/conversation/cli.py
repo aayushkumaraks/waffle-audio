@@ -111,7 +111,7 @@ def main() -> None:
     player = AudioPlayer()
 
     tts.add_listener(player)
-    manager = ConversationManager(stt=stt, llm=llm, tts=tts)
+    manager = ConversationManager(stt=stt, llm=llm, tts=tts, on_user_turn=ui.on_user_turn)
 
     # Wire UI listeners to real-time events
     stt.add_listener(ui)

@@ -171,6 +171,42 @@ class ConversationUITests(unittest.TestCase):
         self.assertIn("Active in-progress user utterance that is long", plain_text)
         self.assertIn("👤 You (speaking):", plain_text)
 
+    def test_multi_line_user_transcript_accumulates_and_displays_fully(self):
+        # Line 1 of speech
+        self.ui.on_transcript_started("Tell me about the solar system")
+        self.ui.on_transcript_completed("Tell me about the solar system")
+
+        # Line 2 of speech (longer utterance spanning multiple STT lines)
+        self.ui.on_transcript_started("and how many planets")
+        self.ui.on_transcript_updated("and how many planets orbit the sun?")
+        self.ui.on_transcript_completed("and how many planets orbit the sun?")
+
+        # In-progress display must contain BOTH line 1 and line 2 (wrapped to terminal width)
+        console = Console(width=80, height=20)
+        layout = self.ui.render(anim_frame=0, console=console)
+        body_panel = layout["body"].renderable
+        plain_text = body_panel.renderable.plain
+        normalized_text = plain_text.replace("\n", " ")
+        self.assertIn("Tell me about the solar system and how many planets orbit the sun?", normalized_text)
+
+        # When generation starts, history must preserve the complete multi-line utterance
+        self.ui.on_generation_started()
+        self.assertEqual(len(self.ui.history), 1)
+        self.assertEqual(
+            self.ui.history[0]["text"],
+            "Tell me about the solar system and how many planets orbit the sun?",
+        )
+
+    def test_on_user_turn_syncs_sentence_gate_text(self):
+        self.ui.on_user_turn("What is quantum computing and how does it work?")
+        self.ui.on_generation_started()
+        self.assertEqual(len(self.ui.history), 1)
+        self.assertEqual(
+            self.ui.history[0]["text"],
+            "What is quantum computing and how does it work?",
+        )
+
+
 
 
 class AudioPlayerPlaybackTests(unittest.TestCase):

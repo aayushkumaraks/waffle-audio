@@ -5,6 +5,8 @@ import re
 import queue
 import threading
 
+from typing import Callable
+
 from models import Message
 
 from services.stt.src import STTListener, STTService
@@ -39,10 +41,12 @@ class ConversationManager(LLMListener):
         stt: STTService,
         llm: LLMService,
         tts: TTSService,
+        on_user_turn: Callable[[str], None] | None = None,
     ) -> None:
         self._stt = stt
         self._llm = llm
         self._tts = tts
+        self._on_user_turn = on_user_turn
 
         self._stt_listener = _STTListenerAdapter(self)
 
@@ -134,6 +138,12 @@ class ConversationManager(LLMListener):
                 content=text,
             )
         )
+
+        if self._on_user_turn is not None:
+            try:
+                self._on_user_turn(text)
+            except Exception as exc:
+                logger.warning("Error in on_user_turn callback: %s", exc)
 
         logger.debug(
             "Conversation history now contains %d message(s).",

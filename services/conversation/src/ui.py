@@ -47,6 +47,7 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
         self._current_user: str = ""
         self._current_assistant: str = ""
         self._pending_user_turn: str = ""
+        self._user_fragments: list[str] = []
         self._llm_generated_text: str = ""
         self._is_generating: bool = False
 
@@ -127,23 +128,39 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
 
     def on_transcript_started(self, text: str) -> None:
         with self._lock:
+            if self._status == "READY":
+                self._user_fragments.clear()
+                self._pending_user_turn = ""
             self._status = "LISTENING"
-            self._current_user = text.strip()
+            prefix = " ".join(self._user_fragments)
+            clean_text = text.strip()
+            self._current_user = f"{prefix} {clean_text}".strip() if prefix else clean_text
             if self._t_speech_start is None:
                 self._t_speech_start = time.perf_counter()
 
     def on_transcript_updated(self, text: str) -> None:
         with self._lock:
             self._status = "LISTENING"
-            self._current_user = text.strip()
+            prefix = " ".join(self._user_fragments)
+            clean_text = text.strip()
+            self._current_user = f"{prefix} {clean_text}".strip() if prefix else clean_text
 
     def on_transcript_completed(self, text: str) -> None:
-        text = text.strip()
+        clean_text = text.strip()
         with self._lock:
-            if text:
-                self._current_user = text
-                self._pending_user_turn = text
+            if clean_text:
+                self._user_fragments.append(clean_text)
+                self._current_user = " ".join(self._user_fragments)
+                self._pending_user_turn = self._current_user
                 self._t_speech_end = time.perf_counter()
+
+    def on_user_turn(self, text: str) -> None:
+        """Called when SentenceGate triggers the finalized user utterance."""
+        clean_text = text.strip()
+        with self._lock:
+            if clean_text:
+                self._pending_user_turn = clean_text
+                self._current_user = clean_text
 
     # ------------------------------------------------------------------
     # LLM Listener callbacks
@@ -160,13 +177,16 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
             self._t_playback_start = None
             self._t_playback_end = None
 
-            if self._pending_user_turn:
-                self._history.append({"role": "user", "text": self._pending_user_turn})
-                self._pending_user_turn = ""
-                self._current_user = ""
-            elif self._current_user:
-                self._history.append({"role": "user", "text": self._current_user})
-                self._current_user = ""
+            final_user = (
+                self._pending_user_turn.strip()
+                or " ".join(self._user_fragments).strip()
+                or self._current_user.strip()
+            )
+            if final_user:
+                self._history.append({"role": "user", "text": final_user})
+            self._pending_user_turn = ""
+            self._user_fragments.clear()
+            self._current_user = ""
             self._current_assistant = ""
             self._llm_generated_text = ""
 
@@ -245,6 +265,9 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
             self._current_assistant = ""
             self._llm_generated_text = ""
             self._t_speech_start = None
+            self._user_fragments.clear()
+            self._pending_user_turn = ""
+            self._current_user = ""
             self._status = "READY"
 
     # ------------------------------------------------------------------
