@@ -60,29 +60,22 @@ echo -e "${CYAN}[3/4]${RESET} Synchronizing Python virtual environment dependenc
 uv sync
 echo -e "${GREEN}✓ Dependencies synchronized.${RESET}"
 
-# 4. Check Ollama service & model
+# 4. Check Ollama service & model using constants.py
 echo -e "${CYAN}[4/4]${RESET} Checking Ollama service and model..."
-OLLAMA_HOST="${VOICECHAT_OLLAMA_HOST:-127.0.0.1:11434}"
-MODEL_NAME="${VOICECHAT_MODEL:-qwen3.5:4b}"
+OLLAMA_BASE_URL=$(uv run --no-sync python -c "import constants; print(constants.OLLAMA_BASE_URL)" 2>/dev/null || echo "http://172.19.96.1:11434")
+MODEL_NAME=$(uv run --no-sync python -c "import constants; print(getattr(constants, 'OLLAMA_MODEL', 'qwen3.5:4b'))" 2>/dev/null || echo "qwen3.5:4b")
+OLLAMA_BASE_URL="${OLLAMA_BASE_URL%/}"
 
-if ! curl -s "http://${OLLAMA_HOST}/api/tags" &> /dev/null; then
-    if command -v ollama &> /dev/null; then
-        echo -e "${YELLOW}Ollama service is not running. Starting background ollama serve...${RESET}"
-        ollama serve >/dev/null 2>&1 &
-        sleep 3
+if curl -s "${OLLAMA_BASE_URL}/api/tags" &> /dev/null; then
+    if curl -s "${OLLAMA_BASE_URL}/api/tags" | grep -q "${MODEL_NAME}"; then
+        echo -e "${GREEN}✓ Ollama model '${MODEL_NAME}' is ready at ${OLLAMA_BASE_URL}.${RESET}"
     else
-        echo -e "${YELLOW}Warning: Ollama not reachable at ${OLLAMA_HOST}.${RESET}"
-        echo -e "${YELLOW}Please ensure Ollama is installed and running with: ollama serve${RESET}"
-    fi
-fi
-
-if curl -s "http://${OLLAMA_HOST}/api/tags" &> /dev/null; then
-    if ! curl -s "http://${OLLAMA_HOST}/api/tags" | grep -q "${MODEL_NAME}"; then
-        echo -e "${YELLOW}Model '${MODEL_NAME}' not found in Ollama. Pulling model now...${RESET}"
+        echo -e "${YELLOW}Model '${MODEL_NAME}' not found at ${OLLAMA_BASE_URL}. Pulling model now...${RESET}"
         ollama pull "${MODEL_NAME}" || true
-    else
-        echo -e "${GREEN}✓ Ollama model '${MODEL_NAME}' is ready.${RESET}"
     fi
+else
+    echo -e "${YELLOW}Warning: Ollama not reachable at ${OLLAMA_BASE_URL}.${RESET}"
+    echo -e "${YELLOW}Please ensure Ollama is installed and running at ${OLLAMA_BASE_URL}.${RESET}"
 fi
 
 # Launch the CLI application
