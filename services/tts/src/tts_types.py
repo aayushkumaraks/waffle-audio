@@ -16,7 +16,7 @@ class TTSConfig:
     quantize: bool = TTS_QUANTIZE
     model_path: str = KOKORO_MODEL_PATH
     voices_path: str = KOKORO_VOICES_PATH
-    queue_size: int = 1
+    queue_size: int = 16
 class TTSListener(ABC):
     @abstractmethod
     def on_synthesis_started(self) -> None: ...
