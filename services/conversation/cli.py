@@ -74,7 +74,9 @@ def main() -> None:
             if player.is_playing:
                 return
             try:
-                stt.push(np.asarray(indata, dtype=np.float32).reshape(-1), 16000)
+                # Copy is required: PortAudio reuses `indata` after the callback returns,
+                # while the STT worker consumes the queued audio asynchronously.
+                stt.push(indata.astype(np.float32).flatten(), 16000)
             except AudioQueueFull:
                 pass
 
