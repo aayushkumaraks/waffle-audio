@@ -30,6 +30,55 @@ uv run python -m services.conversation.cli
 
 ---
 
+## Voice Cloning & Custom Voices (Pocket TTS)
+
+Waffle Audio supports instant voice cloning with Pocket TTS. Cloned voices are saved to `cloned_voices/<voice_name>.safetensors`.
+
+### 1. Clone a voice
+
+Run the interactive cloning wizard:
+
+```bash
+uv run python clone_voice.py
+```
+
+You can record 10-15 seconds directly through your microphone or provide an existing audio file (`.wav`, `.mp3`, etc.):
+
+```bash
+# Clone from an audio file:
+uv run python clone_voice.py --name alex --audio sample.wav
+
+# Clone from microphone with custom duration:
+uv run python clone_voice.py --name alex --record --duration 12
+
+# List all cloned voices:
+uv run python clone_voice.py --list
+```
+
+> [!NOTE]
+> Pocket TTS voice cloning uses gated weights from [Hugging Face (kyutai/pocket-tts)](https://huggingface.co/kyutai/pocket-tts). Simply accept the terms on Hugging Face and provide your token when prompted (or via `HF_TOKEN`).
+
+### 2. Run with your cloned voice
+
+When you launch with `./run.sh` (or `run.bat`), it detects your cloned voices and asks if you would like to use one:
+
+```text
+Cloned Voices Detected:
+  [0] Default voice
+  [1] alex (cloned)
+
+Would you like to use a cloned voice for your assistant? [0-1, default: 0]: 1
+✓ Selected voice: alex
+```
+
+Or pass `--voice <name>` directly:
+
+```bash
+./run.sh --voice alex
+# or
+uv run python -m services.conversation.cli --voice alex
+```
+
 ## Start Ollama (Manual)
 
 The LLM service requires Ollama to be running before the app starts.

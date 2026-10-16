@@ -6,6 +6,7 @@
 # ---------------------------------------------------------------------------
 
 import os
+from pathlib import Path
 
 
 def _int_from_env(name: str, default: int) -> int:
@@ -72,9 +73,48 @@ POCKET_TTS_DEFAULT_LANGUAGE: str = "english"
 POCKET_TTS_CACHE_DIR: str = os.getenv(
     "VOICECHAT_POCKET_TTS_CACHE_DIR", "voiceModels/pocket-tts-cache"
 )
+CLONED_VOICES_DIR: Path = Path(os.getenv("VOICECHAT_CLONED_VOICES_DIR", "cloned_voices"))
 TTS_QUANTIZE: bool = os.getenv("VOICECHAT_TTS_QUANTIZE", "false").lower() in {
     "1", "true", "yes", "on"
 }
+
+
+def list_cloned_voices(directory: Path | str | None = None) -> list[str]:
+    """Return a sorted list of cloned voice names found in the directory."""
+    target_dir = Path(directory) if directory is not None else CLONED_VOICES_DIR
+    if not target_dir.is_dir():
+        return []
+    return sorted(
+        p.stem
+        for p in target_dir.glob("*.safetensors")
+        if p.is_file() and not p.name.startswith(".")
+    )
+
+
+def resolve_voice_spec(voice: str | None, default: str = POCKET_TTS_DEFAULT_VOICE) -> str:
+    """Resolve a voice name or file path for TTS engines.
+
+    If given a name matching an existing cloned voice in CLONED_VOICES_DIR or an
+    existing file path, returns the resolved file path string. Otherwise returns
+    the voice name/identifier.
+    """
+    v = (voice or "").strip()
+    if not v:
+        v = default
+
+    direct_path = Path(v)
+    if direct_path.is_file():
+        return str(direct_path.resolve())
+
+    safetensors_path = CLONED_VOICES_DIR / f"{v}.safetensors"
+    if safetensors_path.is_file():
+        return str(safetensors_path.resolve())
+
+    named_file = CLONED_VOICES_DIR / v
+    if named_file.is_file():
+        return str(named_file.resolve())
+
+    return v
 
 # ---------------------------------------------------------------------------
 # HTTP API

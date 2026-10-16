@@ -118,21 +118,24 @@ If your Ollama server is running elsewhere, update
 
 ---
 
-## 4. Choose a TTS backend
+## 4. TTS backend and voice cloning
 
-Kokoro remains the default and uses the existing model files in `voiceModels/`:
+Pocket TTS is the default backend (`VOICECHAT_TTS_BACKEND=pocket`) and supports real-time voice cloning.
+Its cache is persisted at `voiceModels/pocket-tts-cache/`; override with `VOICECHAT_POCKET_TTS_CACHE_DIR` if needed.
 
+To clone any voice and use it for your assistant:
+```bash
+uv run python clone_voice.py
+```
+> [!NOTE]
+> Pocket TTS voice cloning requires accepting terms on Hugging Face at https://huggingface.co/kyutai/pocket-tts. You will be prompted for your Hugging Face token on first use if not already authenticated.
+
+To switch back to the Kokoro backend, set `VOICECHAT_TTS_BACKEND=kokoro`. Kokoro uses the existing model files in `voiceModels/`:
 ```
 voiceModels/
 ├── kokoro-v1.0.onnx
 └── voices-v1.0.bin
 ```
-
-To opt into Pocket TTS, set `VOICECHAT_TTS_BACKEND=pocket` before starting the
-app. It downloads and caches its model and the default `alba` voice on first use;
-no files need to be placed in `voiceModels/`. Its cache is persisted at
-`voiceModels/pocket-tts-cache/`; override that location with
-`VOICECHAT_POCKET_TTS_CACHE_DIR` if needed.
 
 ---
 

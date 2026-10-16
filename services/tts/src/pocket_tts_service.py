@@ -4,7 +4,12 @@ import os
 from collections.abc import Iterator
 from pathlib import Path
 import numpy as np
-from constants import POCKET_TTS_CACHE_DIR, POCKET_TTS_DEFAULT_LANGUAGE, POCKET_TTS_DEFAULT_VOICE
+from constants import (
+    POCKET_TTS_CACHE_DIR,
+    POCKET_TTS_DEFAULT_LANGUAGE,
+    POCKET_TTS_DEFAULT_VOICE,
+    resolve_voice_spec,
+)
 
 # Pocket TTS uses Hugging Face downloads for model weights and bundled voices.
 # Pin their cache to a project-owned, persistent directory before importing it.
@@ -20,7 +25,8 @@ class PocketTTSService(BaseTTSService):
     def _load_engine(self) -> None:
         def load() -> tuple[TTSModel, object]:
             engine = TTSModel.load_model(language=self._config.language or POCKET_TTS_DEFAULT_LANGUAGE, quantize=self._config.quantize)
-            return engine, engine.get_state_for_audio_prompt(self._config.voice or POCKET_TTS_DEFAULT_VOICE)
+            voice_target = resolve_voice_spec(self._config.voice or POCKET_TTS_DEFAULT_VOICE)
+            return engine, engine.get_state_for_audio_prompt(voice_target)
         # Local cache first (no network); contact Hugging Face only if data is missing.
         engine, self._voice_state = load_local_first(load); self._engine = engine
     def _unload_engine(self) -> None:

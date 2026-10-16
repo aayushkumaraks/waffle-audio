@@ -84,6 +84,69 @@ for arg in "$@"; do
     fi
 done
 
+# 5. Look for cloned voices and offer voice selection if not explicitly provided
+VOICE_ARG=()
+HAS_VOICE_FLAG=false
+for arg in "$@"; do
+    if [[ "$arg" == "--voice" || "$arg" == --voice=* ]]; then
+        HAS_VOICE_FLAG=true
+        break
+    fi
+done
+
+if [ "$HAS_VOICE_FLAG" = false ]; then
+    CLONED_DIR="cloned_voices"
+    CLONED_VOICES=()
+    if [ -d "$CLONED_DIR" ]; then
+        while IFS= read -r f; do
+            if [ -n "$f" ]; then
+                name=$(basename "$f" .safetensors)
+                CLONED_VOICES+=("$name")
+            fi
+        done < <(find "$CLONED_DIR" -maxdepth 1 -name "*.safetensors" 2>/dev/null | sort)
+    fi
+
+    if [ ${#CLONED_VOICES[@]} -gt 0 ]; then
+        echo -e "\n${BOLD}${CYAN}Cloned Voices Detected:${RESET}"
+        echo -e "  ${BOLD}[0]${RESET} Default voice"
+        idx=1
+        for v in "${CLONED_VOICES[@]}"; do
+            echo -e "  ${BOLD}[$idx]${RESET} $v (cloned)"
+            ((idx++))
+        done
+
+        if [ -t 0 ]; then
+            echo -ne "\n${BOLD}Would you like to use a cloned voice for your assistant? [0-${#CLONED_VOICES[@]}, default: 0]: ${RESET}"
+            read -r choice || choice=""
+            choice=$(echo "$choice" | tr -d '[:space:]')
+            if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "${#CLONED_VOICES[@]}" ]; then
+                selected_voice="${CLONED_VOICES[$((choice-1))]}"
+                echo -e "${GREEN}✓ Selected voice: ${BOLD}${selected_voice}${RESET}"
+                VOICE_ARG=("--voice" "${selected_voice}")
+            elif [ -n "$choice" ] && [ "$choice" != "0" ] && [ "$choice" != "n" ] && [ "$choice" != "no" ]; then
+                # Match by typed voice name
+                matched_voice=""
+                for v in "${CLONED_VOICES[@]}"; do
+                    if [ "$choice" == "$v" ]; then
+                        matched_voice="$v"
+                        break
+                    fi
+                done
+                if [ -n "$matched_voice" ]; then
+                    echo -e "${GREEN}✓ Selected voice: ${BOLD}${matched_voice}${RESET}"
+                    VOICE_ARG=("--voice" "${matched_voice}")
+                else
+                    echo -e "${YELLOW}Using default voice.${RESET}"
+                fi
+            else
+                echo -e "${GREEN}Using default voice.${RESET}"
+            fi
+        fi
+    else
+        echo -e "${CYAN}[Voice]${RESET} Using default voice. (Tip: Clone custom voices anytime with: ${BOLD}uv run python clone_voice.py${RESET})"
+    fi
+fi
+
 # Launch the CLI application
 echo -e "\n${BOLD}${GREEN}Starting Waffle Audio CLI...${RESET}\n"
-exec uv run python -m services.conversation.cli "$@"
+exec uv run python -m services.conversation.cli "$@" "${VOICE_ARG[@]}"
