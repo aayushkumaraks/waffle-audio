@@ -9,13 +9,14 @@ from rich.layout import Layout
 from rich.panel import Panel
 from rich.text import Text
 
+from services.audio.src import AudioPlaybackListener
 from services.llm.src import LLMListener
 from services.stt.src import STTListener
 
 StatusType = Literal["READY", "LISTENING", "PROCESSING"]
 
 
-class ConversationUI(STTListener, LLMListener):
+class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
     """Thread-safe UI controller and renderer for the terminal voice interface."""
 
     def __init__(self) -> None:
@@ -25,6 +26,7 @@ class ConversationUI(STTListener, LLMListener):
         self._current_user: str = ""
         self._current_assistant: str = ""
         self._pending_user_turn: str = ""
+        self._llm_generated_text: str = ""
         self._is_generating: bool = False
 
         # ASCII animation frames
@@ -66,9 +68,14 @@ class ConversationUI(STTListener, LLMListener):
     def sync_audio_playback(self, is_playing: bool) -> None:
         """Called by the main loop to reconcile status when audio is playing or done."""
         with self._lock:
-            if is_playing:
+            if is_playing or self._is_generating:
                 self._status = "PROCESSING"
-            elif not self._is_generating and not self._current_user and self._status == "PROCESSING":
+            elif not self._is_generating and not is_playing and self._status == "PROCESSING":
+                if self._current_assistant:
+                    self._history.append(
+                        {"role": "assistant", "text": self._current_assistant.strip()}
+                    )
+                    self._current_assistant = ""
                 self._status = "READY"
 
     # ------------------------------------------------------------------
@@ -108,19 +115,42 @@ class ConversationUI(STTListener, LLMListener):
                 self._history.append({"role": "user", "text": self._current_user})
                 self._current_user = ""
             self._current_assistant = ""
+            self._llm_generated_text = ""
 
     def on_generation_updated(self, text: str) -> None:
         with self._lock:
             self._status = "PROCESSING"
-            self._current_assistant = text
+            # Keep generated text buffered, but do NOT display it yet.
+            # Text will display in sync with audio playback.
+            self._llm_generated_text = text
 
     def on_generation_completed(self, text: str) -> None:
         with self._lock:
             self._is_generating = False
-            full_text = text.strip() or self._current_assistant.strip()
+            self._llm_generated_text = text.strip() or self._llm_generated_text.strip()
+            # Note: Do NOT add to history here; history is committed when audio finishes playing.
+
+    # ------------------------------------------------------------------
+    # Audio Playback Listener callbacks (Synchronized with speech output)
+    # ------------------------------------------------------------------
+
+    def on_playback_started(self) -> None:
+        with self._lock:
+            self._status = "PROCESSING"
+
+    def on_playback_text_updated(self, text: str) -> None:
+        with self._lock:
+            self._status = "PROCESSING"
+            self._current_assistant = text
+
+    def on_playback_completed(self) -> None:
+        with self._lock:
+            full_text = self._current_assistant.strip() or self._llm_generated_text.strip()
             if full_text:
                 self._history.append({"role": "assistant", "text": full_text})
             self._current_assistant = ""
+            self._llm_generated_text = ""
+            self._status = "READY"
 
     # ------------------------------------------------------------------
     # Rich Layout Renderer
@@ -220,14 +250,14 @@ class ConversationUI(STTListener, LLMListener):
             body_content.append("👤 You (speaking): ", style="bold cyan")
             body_content.append(f"{current_user} ▌\n\n", style="italic bright_cyan")
 
-        # In-progress assistant response or thinking loader
+        # In-progress assistant response (streams synchronously as audio plays) or loader
         if current_assistant:
             body_content.append("🧇 Waffle: ", style="bold bright_yellow")
             body_content.append(f"{current_assistant} ▌\n\n", style="bright_white")
         elif (status == "PROCESSING" or is_generating) and not current_assistant:
             body_content.append("🧇 Waffle: ", style="bold bright_yellow")
             body_content.append(
-                f"{spin} Thinking and preparing voice response...\n\n",
+                f"{spin} Thinking and preparing speech...\n\n",
                 style="italic yellow",
             )
 

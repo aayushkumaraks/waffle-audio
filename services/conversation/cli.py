@@ -99,6 +99,7 @@ def main() -> None:
     # Wire UI listeners to real-time events
     stt.add_listener(ui)
     llm.add_listener(ui)
+    player.add_playback_listener(ui)
 
     # Start backend services
     player.start()

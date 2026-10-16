@@ -3,10 +3,10 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+from abc import ABC, abstractmethod
 from typing import TypeAlias
 
 import numpy as np
-
 import sounddevice as sd
 
 from services.tts.src.tts_service import (
@@ -18,7 +18,23 @@ logger = logging.getLogger(__name__)
 
 _STOP = object()
 
-AudioChunk: TypeAlias = tuple[AudioBuffer, int]
+AudioChunk: TypeAlias = tuple[AudioBuffer, int, str]
+
+
+class AudioPlaybackListener(ABC):
+    """Receives events synchronized with physical audio playback."""
+
+    @abstractmethod
+    def on_playback_started(self) -> None:
+        ...
+
+    @abstractmethod
+    def on_playback_text_updated(self, text: str) -> None:
+        ...
+
+    @abstractmethod
+    def on_playback_completed(self) -> None:
+        ...
 
 
 class AudioPlayer(TTSListener):
@@ -30,6 +46,15 @@ class AudioPlayer(TTSListener):
         self._shutdown = threading.Event()
         self._playing = threading.Event()
         self._synthesizing = threading.Event()
+        self._playback_listeners: list[AudioPlaybackListener] = []
+
+    def add_playback_listener(self, listener: AudioPlaybackListener) -> None:
+        if listener not in self._playback_listeners:
+            self._playback_listeners.append(listener)
+
+    def remove_playback_listener(self, listener: AudioPlaybackListener) -> None:
+        if listener in self._playback_listeners:
+            self._playback_listeners.remove(listener)
 
     @property
     def is_playing(self) -> bool:
@@ -72,8 +97,9 @@ class AudioPlayer(TTSListener):
         self,
         audio: AudioBuffer,
         sample_rate: int,
+        text: str = "",
     ) -> None:
-        self._playback_queue.put_nowait((audio, sample_rate))
+        self._playback_queue.put_nowait((audio, sample_rate, text))
 
     def on_synthesis_completed(self) -> None:
         self._synthesizing.clear()
@@ -81,6 +107,7 @@ class AudioPlayer(TTSListener):
     def _playback_worker(self) -> None:
         stream: sd.OutputStream | None = None
         stream_rate: int | None = None
+        accumulated_text = ""
         try:
             while True:
                 item = self._playback_queue.get()
@@ -88,11 +115,13 @@ class AudioPlayer(TTSListener):
                 if item is _STOP:
                     break
 
-                audio, sample_rate = item
+                if len(item) == 3:
+                    audio, sample_rate, text = item
+                else:
+                    audio, sample_rate = item[0], item[1]
+                    text = ""
+
                 try:
-                    # Keep one stream open for adjacent TTS chunks. Reopening the
-                    # device for every generated chunk causes timing gaps and lets
-                    # microphone input leak back into the conversation loop.
                     if stream is None or stream_rate != sample_rate:
                         if stream is not None:
                             stream.close()
@@ -100,18 +129,70 @@ class AudioPlayer(TTSListener):
                             samplerate=sample_rate,
                             channels=2,
                             dtype="float32",
+                            blocksize=512,
                         )
                         stream.start()
                         stream_rate = sample_rate
 
                     self._playing.set()
-                    stream.write(np.column_stack((audio, audio)))
+                    self._dispatch_playback_started()
+
+                    text = text.strip()
+                    words = text.split() if text else []
+                    num_words = len(words)
+                    total_samples = len(audio)
+                    # ~50ms slices to pace word updates with playback
+                    slice_samples = max(512, int(sample_rate * 0.05))
+                    prev_words_shown = 0
+                    prefix = (accumulated_text + " ").lstrip() if accumulated_text else ""
+
+                    for offset in range(0, total_samples, slice_samples):
+                        if self._shutdown.is_set():
+                            break
+                        slice_audio = audio[offset : offset + slice_samples]
+                        stream.write(np.column_stack((slice_audio, slice_audio)))
+
+                        if num_words > 0:
+                            played = offset + len(slice_audio)
+                            fraction = min(1.0, played / total_samples)
+                            words_shown = min(num_words, int(fraction * num_words) + 1)
+                            if words_shown > prev_words_shown:
+                                prev_words_shown = words_shown
+                                partial = " ".join(words[:words_shown])
+                                self._dispatch_playback_text_updated(prefix + partial)
+
+                    if text:
+                        accumulated_text = (accumulated_text + " " + text).strip()
+                        self._dispatch_playback_text_updated(accumulated_text)
+
                 except Exception:
                     logger.exception("Audio playback failed.")
                 finally:
-                    # The queue is intentionally serialized, so this clears only
-                    # after the current chunk has reached the output device.
                     self._playing.clear()
+                    if self._playback_queue.empty() and not self._synthesizing.is_set():
+                        self._dispatch_playback_completed()
+                        accumulated_text = ""
         finally:
             if stream is not None:
                 stream.close()
+
+    def _dispatch_playback_started(self) -> None:
+        for listener in tuple(self._playback_listeners):
+            try:
+                listener.on_playback_started()
+            except Exception:
+                logger.exception("Error in playback started listener.")
+
+    def _dispatch_playback_text_updated(self, text: str) -> None:
+        for listener in tuple(self._playback_listeners):
+            try:
+                listener.on_playback_text_updated(text)
+            except Exception:
+                logger.exception("Error in playback text listener.")
+
+    def _dispatch_playback_completed(self) -> None:
+        for listener in tuple(self._playback_listeners):
+            try:
+                listener.on_playback_completed()
+            except Exception:
+                logger.exception("Error in playback completed listener.")
