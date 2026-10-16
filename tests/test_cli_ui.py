@@ -1,6 +1,7 @@
 import unittest
 import numpy as np
 
+from rich.console import Console
 from services.audio.src import AudioPlaybackListener, AudioPlayer
 from services.conversation.src.ui import ConversationUI
 
@@ -122,6 +123,54 @@ class ConversationUITests(unittest.TestCase):
         # Re-render with populated benchmark
         layout_with_bm = verbose_ui.render(anim_frame=1)
         self.assertIsNotNone(layout_with_bm["benchmark"])
+
+    def test_dialogue_autoscroll_overflow_keeps_latest_turns(self):
+        console = Console(width=80, height=20)
+        # Push 15 turns of conversation to exceed available body height
+        for i in range(1, 16):
+            self.ui.on_transcript_started(f"User message turn {i}")
+            self.ui.on_transcript_completed(f"User message turn {i}")
+            self.ui.on_generation_started()
+            self.ui.on_generation_completed(f"Waffle answer turn {i}")
+            self.ui.on_playback_started()
+            self.ui.on_playback_text_updated(f"Waffle answer turn {i}")
+            self.ui.on_playback_completed()
+
+        layout = self.ui.render(anim_frame=0, console=console)
+        body_panel = layout["body"].renderable
+        plain_text = body_panel.renderable.plain
+
+        # Latest turns MUST be present at the bottom
+        self.assertIn("User message turn 15", plain_text)
+        self.assertIn("Waffle answer turn 15", plain_text)
+
+        # Earliest turns should have scrolled out of visible window
+        self.assertNotIn("User message turn 1\n", plain_text)
+
+        # Panel subtitle should indicate older lines are hidden
+        self.assertIsNotNone(body_panel.subtitle)
+        self.assertIn("older line", str(body_panel.subtitle))
+
+    def test_dialogue_in_progress_speech_visible_at_bottom(self):
+        console = Console(width=80, height=20)
+        # Push 10 completed turns
+        for i in range(1, 11):
+            self.ui.on_transcript_started(f"User turn {i}")
+            self.ui.on_transcript_completed(f"User turn {i}")
+            self.ui.on_playback_text_updated(f"Waffle turn {i}")
+            self.ui.on_playback_completed()
+
+        # User is actively speaking
+        self.ui.on_transcript_started("Active in-progress user utterance")
+        self.ui.on_transcript_updated("Active in-progress user utterance that is long")
+
+        layout = self.ui.render(anim_frame=0, console=console)
+        body_panel = layout["body"].renderable
+        plain_text = body_panel.renderable.plain
+
+        self.assertIn("Active in-progress user utterance that is long", plain_text)
+        self.assertIn("👤 You (speaking):", plain_text)
+
 
 
 class AudioPlayerPlaybackTests(unittest.TestCase):

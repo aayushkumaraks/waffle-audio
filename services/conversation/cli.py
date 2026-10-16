@@ -149,12 +149,12 @@ def main() -> None:
 
         # Run alternate screen live UI with 10 Hz refresh
         console = Console()
-        with Live(ui.render(0), console=console, screen=True, refresh_per_second=10) as live:
+        with Live(ui.render(0, console=console), console=console, screen=True, refresh_per_second=10) as live:
             frame = 0
             while not stop_event.is_set():
                 ui.sync_audio_playback(player.is_playing)
                 frame += 1
-                live.update(ui.render(frame))
+                live.update(ui.render(frame, console=console))
                 time.sleep(0.08)
 
     except KeyboardInterrupt:

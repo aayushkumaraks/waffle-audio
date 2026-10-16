@@ -6,6 +6,7 @@ import time
 from typing import Literal
 
 from rich.align import Align
+from rich.console import Console
 from rich.layout import Layout
 from rich.panel import Panel
 from rich.table import Table
@@ -250,7 +251,7 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
     # Rich Layout Renderer
     # ------------------------------------------------------------------
 
-    def render(self, anim_frame: int = 0) -> Layout:
+    def render(self, anim_frame: int = 0, console: Console | None = None) -> Layout:
         with self._lock:
             status = self._status
             history = list(self._history)
@@ -333,6 +334,16 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
 
         layout["status_box"].update(status_panel)
 
+        # Available dimensions for body panel
+        if console is None:
+            console = getattr(self, "_cached_console", None)
+            if console is None:
+                console = Console()
+                self._cached_console = console
+
+        term_width = console.size.width
+        term_height = console.size.height
+
         # --- Body: Real-time Conversation History & Current Utterance ---
         body_content = Text()
 
@@ -342,9 +353,8 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
                 style="dim italic",
             )
 
-        # Show the most recent conversation messages
-        slice_count = 8 if verbose else 12
-        for item in history[-slice_count:]:
+        # Retain dialogue history (up to last 100 turns in memory)
+        for item in history[-100:]:
             if item["role"] == "user":
                 body_content.append("👤 You: ", style="bold bright_cyan")
                 body_content.append(f"{item['text']}\n\n", style="white")
@@ -368,8 +378,37 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
                 style="italic yellow",
             )
 
+        # Calculate usable vertical lines inside body panel
+        # Header (5) + Footer (3) + Benchmark (9 if verbose) + Panel top/bottom borders (2)
+        fixed_vertical = 5 + 3 + (9 if verbose else 0) + 2
+        avail_body_lines = max(3, term_height - fixed_vertical)
+        # Panel left/right borders and padding
+        avail_body_width = max(20, term_width - 4)
+
+        wrapped_lines = list(body_content.wrap(console, width=avail_body_width))
+        # Strip trailing blank lines so the latest utterance hugs the bottom
+        while wrapped_lines and not wrapped_lines[-1].plain.strip():
+            wrapped_lines.pop()
+
+        total_lines = len(wrapped_lines)
+        if total_lines > avail_body_lines:
+            visible_lines = wrapped_lines[-avail_body_lines:]
+            hidden_lines = total_lines - avail_body_lines
+            subtitle = f"[dim]↑ {hidden_lines} older line{'s' if hidden_lines != 1 else ''} hidden[/dim]"
+        else:
+            visible_lines = wrapped_lines
+            subtitle = None
+
+        visible_content = Text("\n").join(visible_lines) if visible_lines else Text()
+
         layout["body"].update(
-            Panel(body_content, title="💬 Real-Time Conversation", border_style="dim white")
+            Panel(
+                visible_content,
+                title="💬 Real-Time Conversation",
+                subtitle=subtitle,
+                subtitle_align="right",
+                border_style="dim white",
+            )
         )
 
         # --- Verbose Timeline Panel (if enabled) ---
