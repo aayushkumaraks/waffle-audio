@@ -31,13 +31,18 @@ class ConsoleListener(STTListener, LLMListener):
             print(f"\nYou: {text}", flush=True)
 
     def on_generation_started(self) -> None:
-        pass
+        self._printed = 0
+        print("Waffle: ", end="", flush=True)
 
     def on_generation_updated(self, text: str) -> None:
-        pass
+        printed = getattr(self, "_printed", 0)
+        print(text[printed:], end="", flush=True)
+        self._printed = len(text)
 
     def on_generation_completed(self, text: str) -> None:
-        print(f"Waffle: {text}", flush=True)
+        printed = getattr(self, "_printed", 0)
+        print(text[printed:], flush=True)
+        self._printed = 0
 
 
 def main() -> None:

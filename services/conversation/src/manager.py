@@ -199,7 +199,7 @@ class ConversationManager(LLMListener):
                 return
             self._pending_generation = False
 
-        logger.info("LLM generation completed.")
+        logger.info("LLM generation completed: %s", text)
 
         remainder = text[self._spoken_chars:].strip()
         self._spoken_chars = 0
