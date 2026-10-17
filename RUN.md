@@ -48,6 +48,39 @@ uv run python -m services.conversation.emotion_cli --gender male
 uv run python -m services.conversation.emotion_cli --gender female --verbose
 ```
 
+> [!WARNING]
+> **Experimental & Unstable**: The emotional voice assistant is currently in an experimental, unstable state. Live multi-threaded voice model switching, memory offloading under high load, and prompt compliance with emotion tags may vary depending on hardware and LLM model size.
+
+### How It Works
+
+```
+User Speech --> STT (Moonshine) --> LLM with [emotion] prompt --> EmotionParser
+                                                                        |
+                                                    +-------------------+-------------------+
+                                                    |                   |                   |
+                                            [neutral worker]    [happy worker]      [sad/angry worker]
+                                            (Thread 1 / RAM)    (Thread 2 / RAM)    (Thread 3,4 / RAM)
+                                                    \                   |                   /
+                                                     +------------------+------------------+
+                                                                        |
+                                                                  AudioPlayer
+```
+
+1. **Voice Conditioning & Model Extraction**:
+   - Audio clips for 4 core emotions (`neutral`, `happy`, `sad`, `angry`) across female (CREMA-D actor 1003) and male (actor 1011) speakers are processed using PocketTTS's Mimi speech encoder.
+   - Acoustic conditioning tensors are saved into individual `cloned_voices/<emotion>_<gender>.safetensors` files.
+2. **Single-Gender Model Activation**:
+   - At startup, the user chooses either **Female** or **Male**. Only the selected gender's 4 emotion models are loaded into memory and worker threads.
+3. **Thread-Per-Emotion Synthesis Architecture**:
+   - Each emotion model is assigned a dedicated worker thread (`tts-worker-neutral`, `tts-worker-happy`, `tts-worker-sad`, `tts-worker-angry`) with its own synthesis task queue.
+   - Models are loaded resident in memory for sub-10ms switching latency.
+4. **Intelligent Memory Offloading**:
+   - An idle watchdog tracks when each model was last used. If a non-neutral emotion model remains idle beyond the timeout (`--offload-idle <seconds>`, default 120s), its tensors are offloaded from RAM and garbage collected.
+   - When an offloaded emotion is requested again, the model auto-reloads from disk in milliseconds. The neutral model remains resident as a baseline fallback.
+5. **LLM Emotion Parsing & Speech Routing**:
+   - The LLM is instructed via system prompt to prepend emotional tags (`[happy]`, `[sad]`, `[angry]`, `[neutral]`).
+   - `EmotionParser` and `EmotionConversationManager` stream-parse sentences, strip brackets so the user hears natural speech without bracket syntax, and route the text to the matching emotion worker thread.
+
 ### Emotion Features
 - **Gender Voice Selection**: Choose either **Female** or **Male** voice model set at startup.
 - **4 Emotion States**: Every emotion (`neutral`, `happy`, `sad`, `angry`) has its own `.safetensors` model in `cloned_voices/`.
