@@ -90,7 +90,7 @@ Recommended options:
 uv sync
 ```
 
-`uv` reads `pyproject.toml` and creates an isolated virtual environment automatically.
+`uv` reads `pyproject.toml` and creates an isolated virtual environment automatically. This installs all required pipeline components, including `scipy` for polyphase FIR resampling, Silero VAD, Moonshine STT, and Pocket TTS (optional `soxr` is supported for SIMD-accelerated resampling).
 
 ---
 

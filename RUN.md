@@ -22,6 +22,8 @@ uv run python -m services.conversation.cli
 ### CLI Interface Features
 - **Top-Right Status Badge**: Always shows `● READY`, `🎤 LISTENING`, or `⠋ PROCESSING`.
 - **Real-Time Conversation**: Live speech transcription and streaming voice responses synchronized with audio playback.
+- **Instant Interruption (Barge-In)**: Interrupt Waffle at any point while it is speaking. Detection stops speaker playback in <50ms, aborts ongoing LLM inference, and purges TTS queues.
+- **Acoustic Echo Cancellation (AEC)**: Filters assistant speaker audio from the microphone so you can listen on loudspeakers without the assistant triggering its own VAD.
 - **Dynamic Auto-Scrolling**: Keeps dialogue panel anchored at the bottom as turns arrive, with an indicator for scrolled lines.
 - **Multi-Line Speech Accumulation**: Continuous user speech spanning multiple segments is joined into a single coherent prompt.
 - **ASCII Animations**: Dynamic header waveforms and processing spinners.
@@ -125,6 +127,23 @@ All services and the webapp are on this same server and port.
 
 ---
 
+## Unified In-Process Async Pipeline
+
+For embedded Python integration or local programmatic usage without network serialization, the `UnifiedPipeline` runs VAD, STT, LLM, TTS, Player, AEC, and Barge-In directly in a single async event loop passing raw NumPy arrays in-memory:
+
+```python
+import asyncio
+from services.pipeline import UnifiedPipeline
+
+async def main():
+    pipeline = UnifiedPipeline()
+    await pipeline.start()
+
+asyncio.run(main())
+```
+
+---
+
 ## Stop the app
 
 Press `Ctrl+C`. The server shuts down and all services are stopped cleanly.
@@ -144,6 +163,7 @@ Press `Ctrl+C`. The server shuts down and all services are stopped cleanly.
 | STT          | `GET /stt/transcripts`      | Read captured transcript events |
 | STT          | `DELETE /stt/transcripts`   | Clear transcript events |
 | Conversation | `POST /conversation/respond`| Submit finalized user text into conversation flow |
+| Conversation | `POST /conversation/barge-in`| Interrupt current speech (stops playback, aborts LLM, clears TTS) |
 | Conversation | `GET /conversation/history` | Read conversation history |
 | Conversation | `DELETE /conversation/history` | Clear conversation history |
 | Audio        | `GET /audio/status`         | Playback state |
@@ -175,7 +195,9 @@ VOICECHAT_CORS_ALLOW_ORIGINS=http://localhost:8080,http://127.0.0.1:5500 uv run 
 | TTS voice      | `services/tts/src/tts_service.py`            | af_sarah             |
 | TTS speed      | `services/tts/src/tts_service.py`            | 1.0                  |
 | STT language   | `services/stt/src/stt_service.py`            | en                   |
-| Silence gate   | `constants.py` (`VOICECHAT_GAP_TIMEOUT`, `VOICECHAT_QUICK_FIRE_TIMEOUT`) | 2.0 s gap, 0.8 s quick-fire |
+| Silence gate   | `constants.py` (`VOICECHAT_GAP_TIMEOUT`, `VOICECHAT_QUICK_FIRE_TIMEOUT`) | 0.8 s gap, 0.3 s quick-fire |
+| AEC enabled    | `constants.py` (`VOICECHAT_AEC_ENABLED`)     | true                 |
+| Barge-in       | `constants.py` (`VOICECHAT_BARGE_IN_ENABLED`)| true                 |
 
 ---
 

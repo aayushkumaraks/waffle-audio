@@ -52,3 +52,33 @@ Audio stream resampling (e.g. converting 48 kHz WebRTC microphone audio down to 
 - Uses `scipy.signal.resample_poly` for polyphase FIR anti-aliasing filter downsampling when `soxr` is not installed, achieving high throughput without the CPU overhead or latency of heavy libraries like `librosa`.
 - Provides deterministic fallback to linear interpolation if neither library is present.
 
+## Acoustic Echo Cancellation (AEC)
+
+Acoustic echo cancellation is provided by `AcousticEchoCanceller` in `services/audio_processing/src/echo_cancellation.py`:
+
+- **Normalized Least Mean Squares (NLMS)** adaptive filter estimates room impulse response between speaker playback and microphone input.
+- Reference audio emitted by the audio player is fed into the canceller via a circular delay line (`feed_playback_reference`).
+- The predicted echo signal is subtracted from incoming microphone frames prior to VAD processing, preventing the assistant from hearing its own voice and mistaking it for user speech or false interruptions.
+- Adapts filter coefficients with step-size learning rate $\mu$ and regularized power normalization $\epsilon$.
+
+## Instant Interruption (Barge-In)
+
+The `BargeInController` in `services/audio_processing/src/barge_in.py` orchestrates real-time conversational turn-taking:
+
+- Hooks into `VADService`'s `VADListener.on_speech_started` event.
+- When speech is detected while the assistant is speaking or processing:
+  1. Calls `AudioPlayer.interrupt()` to immediately stop active PortAudio stream playback and purge the queued audio buffers.
+  2. Calls `LLMService.abort()` / `LLMProvider.abort()` to terminate in-flight streaming generation and stop Ollama processing.
+  3. Calls `BaseTTSService.interrupt()` to clear the speech synthesis queue and cancel queued sentences.
+  4. Resets `ConversationManager` and `ClauseChunker` state for the incoming user turn.
+- An atomic cancellation token ensures thread-safe and asyncio-safe teardown with sub-50ms reaction time.
+
+## Unified In-Process Pipeline & Zero-Copy IPC
+
+For local execution, `UnifiedPipeline` (`services/pipeline.py`) eliminates network serialization and TCP handshakes:
+
+- Consolidates VAD, AEC, STT, LLM, TTS, Player, and Barge-In in a single asynchronous process.
+- Audio chunks are passed directly in memory as contiguous NumPy `float32` arrays.
+- For multi-process architectures where model isolation is desired, `SharedAudioBuffer` (`services/shared_memory.py`) provides zero-copy shared memory ring buffers backed by POSIX shared memory (`multiprocessing.shared_memory`).
+
+
