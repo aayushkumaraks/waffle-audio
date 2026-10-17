@@ -22,6 +22,18 @@ class VADBackend(Protocol):
         ...
 
 
+class VADListener(Protocol):
+    """Callback listener for VAD voice state transitions."""
+
+    def on_speech_started(self) -> None:
+        """Called immediately when speech activity is detected."""
+        ...
+
+    def on_speech_ended(self) -> None:
+        """Called when trailing silence window finalizes speech."""
+        ...
+
+
 @dataclass(slots=True)
 class VADConfig:
     """Configuration for streaming voice activity detection."""
@@ -29,10 +41,11 @@ class VADConfig:
     enabled: bool = True
     sample_rate: int = 16_000
     threshold: float = 0.5
-    min_silence_duration_ms: int = 300
+    min_silence_duration_ms: int = 200
     speech_pad_ms: int = 100
     pre_speech_padding_ms: int = 200
     frame_samples: int = 512
+
 
 
 class SileroVADBackend:
@@ -103,6 +116,37 @@ class VADService:
         )
         self._in_speech = False
         self._started = False
+        self._listeners: list[VADListener | Callable[[bool], None]] = []
+
+    def add_listener(self, listener: VADListener | Callable[[bool], None]) -> None:
+        """Register a listener for speech activity start/end events."""
+        if listener not in self._listeners:
+            self._listeners.append(listener)
+
+    def remove_listener(self, listener: VADListener | Callable[[bool], None]) -> None:
+        """Unregister a speech activity listener."""
+        if listener in self._listeners:
+            self._listeners.remove(listener)
+
+    def _dispatch_speech_started(self) -> None:
+        for listener in tuple(self._listeners):
+            try:
+                if hasattr(listener, "on_speech_started"):
+                    listener.on_speech_started()
+                elif callable(listener):
+                    listener(True)
+            except Exception:
+                pass
+
+    def _dispatch_speech_ended(self) -> None:
+        for listener in tuple(self._listeners):
+            try:
+                if hasattr(listener, "on_speech_ended"):
+                    listener.on_speech_ended()
+                elif callable(listener):
+                    listener(False)
+            except Exception:
+                pass
 
     @property
     def is_speech(self) -> bool:
@@ -176,6 +220,7 @@ class VADService:
                 if event is not None and "end" in event:
                     self._in_speech = False
                     self._pre_roll.clear()
+                    self._dispatch_speech_ended()
                 continue
 
             # We are idle: retain a small amount of audio in case speech
@@ -186,6 +231,7 @@ class VADService:
                 output.extend(self._pre_roll)
                 self._pre_roll.clear()
                 self._in_speech = True
+                self._dispatch_speech_started()
 
         if not output:
             return np.empty(0, dtype=np.float32)
@@ -204,12 +250,16 @@ class VADService:
         )
 
     def _reset_stream_state(self) -> None:
+        was_in_speech = self._in_speech
         self._input_buffer = np.empty(0, dtype=np.float32)
         self._pre_roll.clear()
         self._in_speech = False
 
         if self._backend is not None:
             self._backend.reset()
+
+        if was_in_speech:
+            self._dispatch_speech_ended()
 
     def _require_started(self) -> None:
         if not self._started:

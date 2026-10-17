@@ -4,7 +4,7 @@ import logging
 import queue
 import threading
 from abc import ABC, abstractmethod
-from typing import TypeAlias
+from typing import Callable, TypeAlias
 
 import numpy as np
 import sounddevice as sd
@@ -38,15 +38,34 @@ class AudioPlaybackListener(ABC):
 
 
 class AudioPlayer(TTSListener):
+    """Plays TTS audio and reports playback events per *response turn*.
+
+    ``on_playback_completed`` fires once, when every queued chunk has played,
+    TTS is no longer synthesizing, and the optional upstream source (the TTS
+    service's pending queue) is idle.  Gaps between streamed clauses therefore
+    do not end the turn.
+    """
+
+    # Frames written per stream.write call; bounds interrupt latency
+    # (2048 frames is ~85 ms at 24 kHz) without cross-thread stream aborts.
+    _WRITE_SLICE = 2048
+
     def __init__(self) -> None:
-        self._playback_queue: queue.Queue[AudioChunk | object] = queue.Queue()
+        self._playback_queue: queue.Queue[tuple | object] = queue.Queue()
 
         self._worker_thread: threading.Thread | None = None
 
         self._shutdown = threading.Event()
         self._playing = threading.Event()
         self._synthesizing = threading.Event()
+        self._interrupted = threading.Event()
         self._playback_listeners: list[AudioPlaybackListener] = []
+        self._monitor_callbacks: list[Callable[[AudioBuffer, int], None]] = []
+        self._upstream_busy: Callable[[], bool] | None = None
+
+        self._state_lock = threading.Lock()
+        self._turn_active = False
+        self._accumulated_text = ""
 
     def add_playback_listener(self, listener: AudioPlaybackListener) -> None:
         if listener not in self._playback_listeners:
@@ -56,17 +75,63 @@ class AudioPlayer(TTSListener):
         if listener in self._playback_listeners:
             self._playback_listeners.remove(listener)
 
+    def add_playback_monitor(self, callback: Callable[[AudioBuffer, int], None]) -> None:
+        """Register a callback that receives reference audio for echo cancellation."""
+        if callback not in self._monitor_callbacks:
+            self._monitor_callbacks.append(callback)
+
+    def remove_playback_monitor(self, callback: Callable[[AudioBuffer, int], None]) -> None:
+        if callback in self._monitor_callbacks:
+            self._monitor_callbacks.remove(callback)
+
+    def set_upstream_busy(self, predicate: Callable[[], bool] | None) -> None:
+        """Register a predicate reporting queued-but-not-yet-synthesized speech."""
+        self._upstream_busy = predicate
+
+    def _is_upstream_busy(self) -> bool:
+        if self._upstream_busy is None:
+            return False
+        try:
+            return bool(self._upstream_busy())
+        except Exception:
+            logger.exception("Upstream busy predicate failed.")
+            return False
+
+    def interrupt(self) -> None:
+        """Stop playback immediately and discard all queued audio.
+
+        Any pending queue items are purged, ongoing stream write breaks
+        within _WRITE_SLICE frames, and turn is closed without dispatching
+        on_playback_completed.
+        """
+        with self._state_lock:
+            self._interrupted.set()
+            self._turn_active = False
+            self._accumulated_text = ""
+            stop_seen = False
+            while True:
+                try:
+                    item = self._playback_queue.get_nowait()
+                except queue.Empty:
+                    break
+                if item is _STOP:
+                    stop_seen = True
+            if stop_seen:
+                self._playback_queue.put_nowait(_STOP)
+            self._synthesizing.clear()
+
     @property
     def is_playing(self) -> bool:
-        """True while audio is actively being played back or still pending.
+        """True while audio is playing or more speech for this turn is pending.
 
-        Stays true across the gaps between streamed sentences so the speaker
-        output of one sentence is not picked up as user speech.
+        Stays true across the gaps between streamed clauses so the speaker
+        output of one clause is not picked up as user speech.
         """
         return (
             self._playing.is_set()
             or self._synthesizing.is_set()
             or not self._playback_queue.empty()
+            or self._is_upstream_busy()
         )
 
     def start(self) -> None:
@@ -103,11 +168,27 @@ class AudioPlayer(TTSListener):
 
     def on_synthesis_completed(self) -> None:
         self._synthesizing.clear()
+        # The last chunk may already have finished playing; close the turn now.
+        self._maybe_complete_turn()
+
+    def _maybe_complete_turn(self) -> None:
+        with self._state_lock:
+            if not self._turn_active:
+                return
+            if (
+                self._playing.is_set()
+                or self._synthesizing.is_set()
+                or not self._playback_queue.empty()
+                or self._is_upstream_busy()
+            ):
+                return
+            self._turn_active = False
+            self._accumulated_text = ""
+        self._dispatch_playback_completed()
 
     def _playback_worker(self) -> None:
         stream: sd.OutputStream | None = None
         stream_rate: int | None = None
-        accumulated_text = ""
         try:
             while True:
                 item = self._playback_queue.get()
@@ -121,10 +202,24 @@ class AudioPlayer(TTSListener):
                     audio, sample_rate = item[0], item[1]
                     text = ""
 
+                with self._state_lock:
+                    if self._interrupted.is_set():
+                        self._interrupted.clear()
+                        continue
+                    self._turn_active = True
+                    self._playing.set()
+                    text = text.strip()
+                    if text:
+                        self._accumulated_text = (
+                            self._accumulated_text + " " + text
+                        ).strip()
+                    accumulated = self._accumulated_text
+
                 try:
                     if stream is None or stream_rate != sample_rate:
                         if stream is not None:
                             stream.close()
+                            stream = None
                         stream = sd.OutputStream(
                             samplerate=sample_rate,
                             channels=2,
@@ -134,26 +229,41 @@ class AudioPlayer(TTSListener):
                         stream.start()
                         stream_rate = sample_rate
 
-                    self._playing.set()
                     self._dispatch_playback_started()
-
-                    text = text.strip()
+                    self._dispatch_playback_monitor(audio, sample_rate)
                     if text:
-                        accumulated_text = (accumulated_text + " " + text).strip()
-                        self._dispatch_playback_text_updated(accumulated_text)
+                        self._dispatch_playback_text_updated(accumulated)
 
-                    stream.write(np.column_stack((audio, audio)))
+                    stereo = np.column_stack((audio, audio)).astype(np.float32, copy=False)
+                    for start in range(0, len(stereo), self._WRITE_SLICE):
+                        if self._interrupted.is_set():
+                            break  # interrupted mid-chunk
+                        stream.write(stereo[start:start + self._WRITE_SLICE])
 
                 except Exception:
                     logger.exception("Audio playback failed.")
+                    # Recreate the device stream on the next chunk.
+                    if stream is not None:
+                        try:
+                            stream.close()
+                        except Exception:
+                            pass
+                    stream = None
+                    stream_rate = None
                 finally:
                     self._playing.clear()
-                    if self._playback_queue.empty() and not self._synthesizing.is_set():
-                        self._dispatch_playback_completed()
-                        accumulated_text = ""
+                    self._maybe_complete_turn()
         finally:
             if stream is not None:
                 stream.close()
+
+    def _dispatch_playback_monitor(self, audio: AudioBuffer, sample_rate: int) -> None:
+        for cb in tuple(self._monitor_callbacks):
+            try:
+                cb(audio, sample_rate)
+            except Exception:
+                logger.exception("Error in playback monitor callback.")
+
 
     def _dispatch_playback_started(self) -> None:
         for listener in tuple(self._playback_listeners):

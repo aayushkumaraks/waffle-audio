@@ -14,6 +14,7 @@ import sounddevice as sd
 from rich.console import Console
 from rich.live import Live
 
+from constants import AEC_ENABLED, BARGE_IN_ENABLED
 from services.audio.src import AudioPlayer
 from services.conversation.src import ConversationManager, ConversationUI
 from services.conversation.src.ui import (
@@ -22,6 +23,12 @@ from services.conversation.src.ui import (
     README_TARGET_GATE,
     README_TARGET_LLM_FULL,
     README_TARGET_TTS_FIRST,
+)
+from services.audio_processing.src import (
+    AcousticEchoCanceller,
+    BargeInController,
+    VADConfig,
+    VADService,
 )
 from services.llm.src import LLMProvider, LLMProviderConfig, LLMService
 from services.stt.src import AudioQueueFull, STTService
@@ -54,7 +61,6 @@ def _setup_logging() -> None:
         "onnxruntime",
         "moonshine_voice",
         "urllib3",
-        "services",
         "pocket_tts",
         "kokoro_onnx",
     ]:
@@ -110,14 +116,31 @@ def main() -> None:
     ui = ConversationUI(verbose=args.verbose)
 
     # Initialize audio and conversation services
+    vad = VADService(VADConfig(min_silence_duration_ms=200, pre_speech_padding_ms=200))
+    aec = AcousticEchoCanceller()
     stt = STTService()
     provider = LLMProvider(LLMProviderConfig())
     llm = LLMService(provider)
     tts = TTSService(TTSConfig(voice=args.voice))
     player = AudioPlayer()
+    player.set_upstream_busy(lambda: getattr(tts, "is_busy", False))
+
+    # Wire echo cancellation reference monitor from playback output
+    player.add_playback_monitor(aec.feed_reference)
 
     tts.add_listener(player)
     manager = ConversationManager(stt=stt, llm=llm, tts=tts, on_user_turn=ui.on_user_turn)
+
+    # Wire instant interruption / barge-in controller
+    barge_in = BargeInController(
+        player=player,
+        manager=manager,
+        tts=tts,
+        llm=llm,
+        on_barge_in=ui.on_barge_in,
+    )
+    barge_in.enabled = BARGE_IN_ENABLED
+    vad.add_listener(barge_in)
 
     # Wire UI listeners to real-time events
     stt.add_listener(ui)
@@ -125,6 +148,7 @@ def main() -> None:
     player.add_playback_listener(ui)
 
     # Start backend services
+    vad.start()
     player.start()
     tts.start()
     llm.start()
@@ -132,14 +156,28 @@ def main() -> None:
     stt.start()
 
     def audio_callback(indata, frames, time_info, status):
-        if player.is_playing:
+        # When barge-in is disabled, mute microphone while assistant is speaking
+        # to guarantee zero acoustic feedback and prevent the assistant from hearing itself.
+        if not BARGE_IN_ENABLED and player.is_playing:
             return
         try:
-            # Copy flattened audio to prevent buffer reuse race conditions
             audio = indata.astype(np.float32).flatten()
-            stt.push(audio, 16000)
+            if BARGE_IN_ENABLED and AEC_ENABLED:
+                cleaned = aec.process(audio, 16000)
+            else:
+                cleaned = audio
+
+            # When barge-in is enabled, run VAD to detect speech onset for interruption
+            if BARGE_IN_ENABLED:
+                vad.process(cleaned, 16000)
+
+            # Moonshine STT requires continuous audio (including silence)
+            # to segment utterances and trigger on_line_completed.
+            stt.push(cleaned, 16000)
         except AudioQueueFull:
             pass
+        except Exception:
+            logger.exception("Error in CLI audio callback.")
 
     stream = None
     try:
@@ -175,6 +213,7 @@ def main() -> None:
             except Exception:
                 pass
 
+        vad.stop()
         stt.stop()
         manager.stop()
         llm.stop()

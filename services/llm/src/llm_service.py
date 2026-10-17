@@ -100,6 +100,20 @@ class LLMService(LLMCallbacks):
 
         self._started = False
 
+    def abort(self) -> None:
+        """Instantly abort any active generation and drain pending queue items."""
+        if hasattr(self._provider, "abort"):
+            self._provider.abort()
+
+        while not self._generation_queue.empty():
+            try:
+                item = self._generation_queue.get_nowait()
+                if item is _STOP:
+                    self._generation_queue.put_nowait(_STOP)
+                    break
+            except queue.Empty:
+                break
+
     def generate(self, messages: Sequence[Message]) -> None:
         if not self._started:
             raise ServiceNotStarted("LLMService is not started.")

@@ -130,13 +130,22 @@ class SentenceGate:
     def notify_speech_active(self) -> None:
         """Called when new speech is detected or actively streaming.
 
-        Cancels any pending silence timer so the gate never interrupts the
-        user while speech is actively in progress.
+        Postpones the silence timer so the gate never interrupts the
+        user while speech is actively in progress, but ensures any buffered
+        utterance is still dispatched once speech ceases.
         """
         with self._lock:
             if self._pending_timer is not None:
                 self._pending_timer.cancel()
                 self._pending_timer = None
+
+            if self._buffer:
+                accumulated = " ".join(self._buffer)
+                delay = self._compute_delay(accumulated)
+                timer = threading.Timer(delay, self._fire)
+                timer.daemon = True
+                timer.start()
+                self._pending_timer = timer
 
     def submit(self, text: str) -> None:
         """Append a new fragment and reset the silence timer."""
@@ -201,3 +210,103 @@ class SentenceGate:
         adaptive_factor = 1.0 + (1.0 - avg_score) * 0.5
 
         return self._gap_timeout * adaptive_factor
+
+
+class ClauseChunker:
+    """Adaptive clause and sentence boundary chunker for streaming LLM tokens.
+
+    Provides:
+    1. First-Chunk Fast Path: Allows the very first chunk of an assistant
+       response to be short (3–5 words: e.g., "Sure, I can help...") to dispatch
+       immediately to TTS for under 200ms audio latency.
+    2. Adaptive Clause Chunking: Triggers synthesis on intermediate clause markers
+       (',', ';', ':', '—', '--') or coordinating conjunctions ('and', 'but',
+       'because', 'however', 'although', 'since') once a minimum token count
+       (4–6 words) is reached.
+    3. Full Sentence Boundaries: Triggers on '.', '!', '?' as terminal boundaries.
+    """
+
+    _CLAUSE_PUNCT_RE = re.compile(r"([,;:\u2014]|\s--\s)[\"')\]]*\s")
+    _SENTENCE_END_RE = re.compile(r"[.!?][\"')\]]*\s")
+    _CONJUNCTION_RE = re.compile(
+        r"\s+(and|but|because|however|although|since|so|yet)\s+",
+        re.IGNORECASE,
+    )
+
+    def __init__(
+        self,
+        *,
+        first_chunk_min_words: int = 3,
+        clause_min_words: int = 5,
+        sentence_min_words: int = 3,
+    ) -> None:
+        self._first_chunk_min_words = first_chunk_min_words
+        self._clause_min_words = clause_min_words
+        self._sentence_min_words = sentence_min_words
+        self._cursor = 0
+        self._is_first_chunk = True
+
+    def reset(self) -> None:
+        self._cursor = 0
+        self._is_first_chunk = True
+
+    @property
+    def spoken_chars(self) -> int:
+        return self._cursor
+
+    def process_stream(self, text: str) -> list[str]:
+        """Process incremental LLM stream text and return any newly ready chunks."""
+        chunks: list[str] = []
+        while self._cursor < len(text):
+            unprocessed = text[self._cursor:]
+            boundary = self._find_next_boundary(unprocessed, is_first=self._is_first_chunk)
+            if boundary is None:
+                break
+
+            chunk = unprocessed[:boundary].strip()
+            self._cursor += boundary
+            if chunk:
+                chunks.append(chunk)
+                self._is_first_chunk = False
+
+        return chunks
+
+    def finalize(self, text: str) -> str | None:
+        """Finalize stream at completion, returning any remaining unspoken text."""
+        remainder = text[self._cursor:].strip()
+        self._cursor = len(text)
+        self._is_first_chunk = True
+        return remainder if remainder else None
+
+    def _find_next_boundary(self, subtext: str, is_first: bool) -> int | None:
+        words = subtext.split()
+        if not words:
+            return None
+
+        # Check sentence terminal boundaries first
+        sent_match = self._SENTENCE_END_RE.search(subtext)
+        if sent_match:
+            chunk_words = subtext[:sent_match.end()].split()
+            min_w = self._first_chunk_min_words if is_first else self._sentence_min_words
+            if len(chunk_words) >= min_w:
+                return sent_match.end()
+
+        # Check intermediate clause punctuation: , ; : — --
+        clause_match = self._CLAUSE_PUNCT_RE.search(subtext)
+        if clause_match:
+            chunk_words = subtext[:clause_match.end()].split()
+            min_w = self._first_chunk_min_words if is_first else self._clause_min_words
+            if len(chunk_words) >= min_w:
+                return clause_match.end()
+
+        # Check coordinating conjunctions (and, but, because, etc.)
+        min_conj_words = self._first_chunk_min_words if is_first else self._clause_min_words
+        if len(words) >= min_conj_words + 2:
+            conj_match = self._CONJUNCTION_RE.search(subtext)
+            if conj_match:
+                prefix = subtext[:conj_match.start()]
+                if len(prefix.split()) >= min_conj_words:
+                    return conj_match.start()
+
+        return None
+

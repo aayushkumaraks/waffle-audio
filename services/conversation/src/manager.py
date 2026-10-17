@@ -13,7 +13,7 @@ from models import Message
 from services.stt.src import STTListener, STTService
 from services.llm.src import LLMListener, LLMService
 from services.tts.src import TTSService
-from .sentence_gate import SentenceGate
+from .sentence_gate import ClauseChunker, SentenceGate
 
 logger = logging.getLogger(__name__)
 
@@ -45,11 +45,13 @@ class ConversationManager(LLMListener):
         on_user_turn: Callable[[str], None] | None = None,
         gap_timeout: float = SENTENCE_GATE_GAP_TIMEOUT,
         quick_fire_timeout: float = SENTENCE_GATE_QUICK_FIRE_TIMEOUT,
+        max_history_turns: int = 8,
     ) -> None:
         self._stt = stt
         self._llm = llm
         self._tts = tts
         self._on_user_turn = on_user_turn
+        self._max_history_turns = max_history_turns
 
         self._stt_listener = _STTListenerAdapter(self)
 
@@ -60,10 +62,11 @@ class ConversationManager(LLMListener):
             gap_timeout=gap_timeout,
             quick_fire_timeout=quick_fire_timeout,
         )
+        self._chunker = ClauseChunker()
+        self._partial_reply = ""
 
         self._started = False
         self._pending_generation = False
-        self._spoken_chars = 0
         self._state_lock = threading.Lock()
 
     def start(self) -> None:
@@ -139,6 +142,12 @@ class ConversationManager(LLMListener):
 
         self._gate.submit(text)
 
+    def _prune_history(self) -> None:
+        """Maintain a strict sliding context window (last N turns) to keep TTFT low."""
+        max_messages = self._max_history_turns * 2
+        if len(self._history) > max_messages:
+            self._history = self._history[-max_messages:]
+
     def _trigger_llm(self, text: str) -> None:
         """Called by SentenceGate once the utterance looks complete."""
         self._history.append(
@@ -147,6 +156,7 @@ class ConversationManager(LLMListener):
                 content=text,
             )
         )
+        self._prune_history()
 
         if self._on_user_turn is not None:
             try:
@@ -159,28 +169,33 @@ class ConversationManager(LLMListener):
             len(self._history),
         )
 
+        with self._state_lock:
+            self._pending_generation = True
+            self._partial_reply = ""
         try:
             self._llm.generate(self._history)
-            with self._state_lock:
-                self._pending_generation = True
         except queue.Full:
+            with self._state_lock:
+                self._pending_generation = False
             logger.warning(
                 "LLM queue is full — dropping utterance: %s", text
             )
 
     # ------------------------------------------------------------------
-    # LLM Event Handlers
+    # LLM Event Handlers & Adaptive Clause Gating
     # ------------------------------------------------------------------
 
-    # A sentence ends at . ! or ? (plus optional closing quotes) followed by
-    # whitespace; requiring the following space avoids splitting on decimals.
-    _SENTENCE_END = re.compile(r"[.!?][\"')\]]*\s")
-    # Avoid sending tiny fragments (e.g. "Sure.") to TTS on their own.
-    _MIN_SPEECH_CHARS = 30
+    @property
+    def _spoken_chars(self) -> int:
+        return self._chunker.spoken_chars
+
+    @_spoken_chars.setter
+    def _spoken_chars(self, val: int) -> None:
+        self._chunker._cursor = val
 
     def on_generation_started(self) -> None:
         logger.debug("LLM generation started.")
-        self._spoken_chars = 0
+        self._chunker.reset()
 
     def on_generation_updated(self, text: str) -> None:
         logger.debug("LLM generation updated.")
@@ -188,20 +203,10 @@ class ConversationManager(LLMListener):
         with self._state_lock:
             if not self._pending_generation:
                 return
+            self._partial_reply = text
 
-        boundary = None
-        for match in self._SENTENCE_END.finditer(text, self._spoken_chars):
-            boundary = match.end()
-
-        if boundary is None:
-            return
-
-        chunk = text[self._spoken_chars:boundary].strip()
-        if len(chunk) < self._MIN_SPEECH_CHARS:
-            return
-
-        self._spoken_chars = boundary
-        self._speak(chunk)
+        for chunk in self._chunker.process_stream(text):
+            self._speak(chunk)
 
     def _speak(self, text: str) -> None:
         try:
@@ -220,8 +225,7 @@ class ConversationManager(LLMListener):
 
         logger.info("LLM generation completed: %s", text)
 
-        remainder = text[self._spoken_chars:].strip()
-        self._spoken_chars = 0
+        remainder = self._chunker.finalize(text)
         if remainder:
             self._speak(remainder)
 
@@ -231,8 +235,39 @@ class ConversationManager(LLMListener):
                 content=text,
             )
         )
+        self._prune_history()
 
         logger.debug(
             "Conversation history now contains %d message(s).",
             len(self._history),
         )
+
+    def barge_in(self) -> None:
+        """Instantly interrupt assistant speech and ongoing LLM generation."""
+        logger.info("Barge-in: interrupting LLM generation and flushing TTS/audio.")
+        with self._state_lock:
+            was_pending = self._pending_generation
+            self._pending_generation = False
+            partial = self._partial_reply.strip()
+            self._partial_reply = ""
+        self._chunker.reset()
+
+        # Keep user/assistant alternation in the LLM context: record the part
+        # of the reply that was generated before the interruption.
+        if was_pending and partial:
+            self._history.append(Message(role="assistant", content=partial))
+            self._prune_history()
+
+        # Abort LLM stream if supported
+        if hasattr(self._llm, "abort"):
+            try:
+                self._llm.abort()
+            except Exception:
+                logger.exception("Error aborting LLM generation on barge-in.")
+
+        # Interrupt TTS queue if supported
+        if hasattr(self._tts, "interrupt"):
+            try:
+                self._tts.interrupt()
+            except Exception:
+                logger.exception("Error interrupting TTS on barge-in.")
