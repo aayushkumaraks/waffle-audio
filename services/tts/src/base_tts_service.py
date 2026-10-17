@@ -27,6 +27,17 @@ class BaseTTSService(ABC):
         if not self._started: raise ServiceNotStarted("TTSService is not started.")
         try: self._speech_queue.put_nowait(text)
         except queue.Full as exc: raise SpeechQueueFull("Speech queue is full.") from exc
+    def interrupt(self) -> None:
+        """Purge pending text from the speech queue for instant barge-in."""
+        while not self._speech_queue.empty():
+            try:
+                item = self._speech_queue.get_nowait()
+                if item is _STOP:
+                    self._speech_queue.put_nowait(_STOP)
+                    break
+            except queue.Empty:
+                break
+
     def add_listener(self, listener: TTSListener) -> None:
         if listener not in self._listeners: self._listeners.append(listener)
     def remove_listener(self, listener: TTSListener) -> None:

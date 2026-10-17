@@ -51,6 +51,12 @@ class LLMProvider:
             base_url=config.base_url,
             timeout=httpx.Timeout(60.0),
         )
+        self._abort_event = threading.Event()
+
+    def abort(self) -> None:
+        """Signal immediate abort of active LLM streaming."""
+        self._abort_event.set()
+
 
     def start(self) -> None:
         """Verify that the Ollama server is reachable."""
@@ -87,7 +93,7 @@ class LLMProvider:
 
     def stop(self) -> None:
         """Release provider resources."""
-
+        self.abort()
         self._client.close()
 
     def generate(
@@ -95,8 +101,8 @@ class LLMProvider:
         messages: Sequence[Message],
         callbacks: LLMCallbacks,
     ) -> None:
-        """Generate a streamed response."""
-
+        """Generate a streamed response with instant abort support."""
+        self._abort_event.clear()
         payload = self._build_request(messages)
 
         try:
@@ -111,6 +117,10 @@ class LLMProvider:
                 generated_text = ""
 
                 for line in response.iter_lines():
+                    if self._abort_event.is_set():
+                        logger.info("LLM generation aborted by signal.")
+                        break
+
                     if not line:
                         continue
 
@@ -132,28 +142,32 @@ class LLMProvider:
 
                     callbacks.on_generation_updated(generated_text)
 
-                if generation_started:
+                if generation_started and not self._abort_event.is_set():
                     callbacks.on_generation_completed(generated_text)
 
         except (httpx.HTTPError, json.JSONDecodeError) as exc:
-            raise LLMProviderError(
-                "Failed to generate response."
-            ) from exc
+            if not self._abort_event.is_set():
+                raise LLMProviderError(
+                    "Failed to generate response."
+                ) from exc
 
     _SYSTEM_PROMPT = (
-        "You are a helpful voice assistant. Your name is Waffle. You are a voice assistant with a calm and friendly tone. "
-        "Your responses are spoken aloud by a text-to-speech engine, so follow these rules strictly:\n"
-        "1. Reply in 2-3 short sentences only.\n"
-        "2. Use plain English words only — no emojis, no symbols, no markdown, no bullet points, no asterisks, no hashtags.\n"
-        "3. Write out numbers and units in full (e.g. 'three kilometres' not '3km').\n"
-        "4. Do not include any special characters that are not standard punctuation (period, comma, question mark, exclamation mark)."
+        "You are a helpful voice assistant named Waffle. You speak in a natural, calm, and friendly conversational tone.\n"
+        "Your responses are read aloud by a text-to-speech engine (Kokoro/Pocket TTS), so strictly adhere to these speech rules:\n"
+        "1. Reply in 2-3 short, spoken sentences only.\n"
+        "2. Output plain spoken English words only. NEVER output markdown tables, bullet points, headers, emojis, URLs, or code blocks.\n"
+        "3. NEVER include asterisked or bracketed actions or expressive tags (e.g. do NOT write *laughs*, *smiles*, [sighs], or *chuckles*).\n"
+        "4. Spell out numbers, measurements, and symbols in full words (e.g., 'three kilometers' not '3km', 'percent' not '%').\n"
+        "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes."
     )
 
     def _build_request(
         self,
         messages: Sequence[Message],
     ) -> dict[str, Any]:
-        """Build an Ollama chat request."""
+        """Build an Ollama chat request with sliding window guard."""
+        # Enforce sliding window: retain at most the last 16 messages (8 turns)
+        sliding_messages = messages[-16:] if len(messages) > 16 else messages
 
         system_message = {"role": "system", "content": self._SYSTEM_PROMPT}
 
@@ -164,7 +178,7 @@ class LLMProvider:
                     "role": message.role,
                     "content": message.content,
                 }
-                for message in messages
+                for message in sliding_messages
             ],
             "stream": True,
             "think": False,

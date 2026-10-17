@@ -46,7 +46,10 @@ class AudioPlayer(TTSListener):
         self._shutdown = threading.Event()
         self._playing = threading.Event()
         self._synthesizing = threading.Event()
+        self._interrupted = threading.Event()
         self._playback_listeners: list[AudioPlaybackListener] = []
+        self._monitor_callbacks: list[Callable[[AudioBuffer, int], None]] = []
+        self._current_stream: sd.OutputStream | None = None
 
     def add_playback_listener(self, listener: AudioPlaybackListener) -> None:
         if listener not in self._playback_listeners:
@@ -55,6 +58,36 @@ class AudioPlayer(TTSListener):
     def remove_playback_listener(self, listener: AudioPlaybackListener) -> None:
         if listener in self._playback_listeners:
             self._playback_listeners.remove(listener)
+
+    def add_playback_monitor(self, callback: Callable[[AudioBuffer, int], None]) -> None:
+        """Register a callback that receives reference audio for echo cancellation."""
+        if callback not in self._monitor_callbacks:
+            self._monitor_callbacks.append(callback)
+
+    def remove_playback_monitor(self, callback: Callable[[AudioBuffer, int], None]) -> None:
+        if callback in self._monitor_callbacks:
+            self._monitor_callbacks.remove(callback)
+
+    def interrupt(self) -> None:
+        """Immediately stop and flush the output buffer for instant barge-in."""
+        self._interrupted.set()
+        while not self._playback_queue.empty():
+            try:
+                item = self._playback_queue.get_nowait()
+                if item is _STOP:
+                    self._playback_queue.put_nowait(_STOP)
+                    break
+            except queue.Empty:
+                break
+
+        self._playing.clear()
+        self._synthesizing.clear()
+        if self._current_stream is not None:
+            try:
+                self._current_stream.abort()
+            except Exception:
+                pass
+        self._dispatch_playback_completed()
 
     @property
     def is_playing(self) -> bool:
@@ -133,9 +166,15 @@ class AudioPlayer(TTSListener):
                         )
                         stream.start()
                         stream_rate = sample_rate
+                        self._current_stream = stream
+
+                    if self._interrupted.is_set():
+                        self._interrupted.clear()
+                        continue
 
                     self._playing.set()
                     self._dispatch_playback_started()
+                    self._dispatch_playback_monitor(audio, sample_rate)
 
                     text = text.strip()
                     if text:
@@ -152,8 +191,17 @@ class AudioPlayer(TTSListener):
                         self._dispatch_playback_completed()
                         accumulated_text = ""
         finally:
+            self._current_stream = None
             if stream is not None:
                 stream.close()
+
+    def _dispatch_playback_monitor(self, audio: AudioBuffer, sample_rate: int) -> None:
+        for cb in tuple(self._monitor_callbacks):
+            try:
+                cb(audio, sample_rate)
+            except Exception:
+                logger.exception("Error in playback monitor callback.")
+
 
     def _dispatch_playback_started(self) -> None:
         for listener in tuple(self._playback_listeners):
