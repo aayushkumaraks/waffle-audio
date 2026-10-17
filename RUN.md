@@ -42,6 +42,10 @@ uv run python -m services.conversation.emotion_cli
 # Specify gender explicitly (female or male):
 uv run python -m services.conversation.emotion_cli --gender female
 uv run python -m services.conversation.emotion_cli --gender male
+
+# Enable verbose latency profiling and README benchmark timeline:
+./run-with-emotion.sh --verbose
+uv run python -m services.conversation.emotion_cli --gender female --verbose
 ```
 
 ### Emotion Features
@@ -50,6 +54,7 @@ uv run python -m services.conversation.emotion_cli --gender male
 - **Thread-Per-Emotion Workers**: Each emotion model runs in a dedicated thread (`tts-worker-neutral`, `tts-worker-happy`, `tts-worker-sad`, `tts-worker-angry`).
 - **In-Memory Caching with Automatic Offloading**: Models stay in RAM for rapid response and automatically offload to release memory when idle (`--offload-idle <seconds>`).
 - **Real-Time LLM Emotion Tagging & Parsing**: The LLM specifies its emotional tone via tags like `[happy]`, `[sad]`, `[angry]`, or `[neutral]`, which are dynamically parsed to route speech chunks to the matching emotion voice worker.
+- **Verbose Latency Profiling**: Pass `--verbose` or `-v` to show live pipeline latency metrics and compare against the README warm turn benchmarks.
 
 ### CLI Interface Features
 - **Top-Right Status Badge**: Always shows `● READY`, `🎤 LISTENING`, or `⠋ PROCESSING`.

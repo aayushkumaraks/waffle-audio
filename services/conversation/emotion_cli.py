@@ -242,6 +242,42 @@ def main() -> None:
                     emo_tag = f" [{msg.get('emotion', 'neutral').upper()}]"
                     print(f"{idx}. [Waffle{emo_tag}] {msg['text']}")
 
+        if args.verbose and ui.benchmarks:
+            from services.conversation.src.emotion_ui import (
+                README_TARGET_E2E,
+                README_TARGET_FIRST_TOKEN,
+                README_TARGET_GATE,
+                README_TARGET_LLM_FULL,
+                README_TARGET_TTS_FIRST,
+            )
+            print("\n" + "=" * 70)
+            print("LATENCY TIMELINE & README BENCHMARK COMPARISON")
+            print("=" * 70)
+            print(
+                f"README Reference: Warm Turn E2E = {README_TARGET_E2E}s | Cold Start = 6.8s | Before Opt = 3.3s\n"
+            )
+            for i, bm in enumerate(ui.benchmarks, start=1):
+                print(f"Turn #{i}:")
+                print(f"  User       : \"{bm['user_text']}\"")
+                print(f"  Assistant  : \"{bm['assistant_text']}\"")
+                print("  Timeline Breakdown:")
+                print(
+                    f"    1. Sentence Gate      : {bm['gate_dur']:5.2f}s  (Target: {README_TARGET_GATE:4.2f}s  |  Δ {bm['gate_dur'] - README_TARGET_GATE:+.2f}s)"
+                )
+                print(
+                    f"    2. LLM First Token    : {bm['first_token_dur']:5.2f}s  (Target: {README_TARGET_FIRST_TOKEN:4.2f}s  |  Δ {bm['first_token_dur'] - README_TARGET_FIRST_TOKEN:+.2f}s)"
+                )
+                print(
+                    f"    3. LLM Full Reply     : {bm['full_llm_dur']:5.2f}s  (Target: {README_TARGET_LLM_FULL:4.2f}s  |  Δ {bm['full_llm_dur'] - README_TARGET_LLM_FULL:+.2f}s)"
+                )
+                print(
+                    f"    4. TTS First Speech   : {bm['tts_first_dur']:5.2f}s  (Target: {README_TARGET_TTS_FIRST:4.2f}s  |  Δ {bm['tts_first_dur'] - README_TARGET_TTS_FIRST:+.2f}s)"
+                )
+                print(
+                    f"    5. Total E2E Latency  : {bm['e2e_dur']:5.2f}s  (Target: {README_TARGET_E2E:4.2f}s  |  Δ {bm['e2e_dur'] - README_TARGET_E2E:+.2f}s)"
+                )
+                print(f"    Total Turn Duration   : {bm['total_dur']:5.2f}s\n")
+
         print("=" * 70)
         print("Waffle Audio stopped cleanly.\n")
 

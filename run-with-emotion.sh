@@ -95,6 +95,12 @@ if [ "$MISSING_MODELS" -eq 1 ]; then
 fi
 echo -e "${GREEN}✓ All emotion voice models verified in cloned_voices/.${RESET}"
 
+for arg in "$@"; do
+    if [[ "$arg" == "--verbose" || "$arg" == "-v" ]]; then
+        echo -e "${CYAN}[INFO]${RESET} Verbose latency profiling & README benchmark comparison enabled."
+    fi
+done
+
 # Gender selection
 GENDER_ARG=""
 for arg in "$@"; do
@@ -120,6 +126,11 @@ if [ -z "$GENDER_ARG" ] && [ -t 0 ]; then
     fi
 fi
 
+EXTRA_ARGS=()
+if [ -n "$GENDER_ARG" ]; then
+    EXTRA_ARGS+=("$GENDER_ARG")
+fi
+
 # Launch Emotional Voice Assistant CLI
 echo -e "\n${BOLD}${GREEN}Starting Waffle Audio Emotional Voice Assistant...${RESET}\n"
-exec uv run python -m services.conversation.emotion_cli "$GENDER_ARG" "$@"
+exec uv run python -m services.conversation.emotion_cli "${EXTRA_ARGS[@]}" "$@"

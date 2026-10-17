@@ -33,6 +33,11 @@ if "%MISSING%"=="1" (
 )
 echo All emotion voice models verified.
 
+for %%A in (%*) do (
+    if "%%A"=="--verbose" echo [INFO] Verbose latency profiling and benchmark comparison enabled.
+    if "%%A"=="-v" echo [INFO] Verbose latency profiling and benchmark comparison enabled.
+)
+
 setlocal enabledelayedexpansion
 set "GENDER_OPT="
 

@@ -146,10 +146,11 @@ On Windows:
 run-with-emotion.bat
 ```
 
-- **Gender Selection**: Select Female or Male at startup.
+- **Gender Selection**: Select Female or Male at startup (or pass `--gender female` / `--gender male`).
 - **Emotions Supported**: `neutral`, `happy`, `sad`, `angry`.
 - **Thread-Per-Emotion Workers**: In-memory caching with automatic offload when idle (`--offload-idle 120`).
 - **Live Emotion Parsing**: Real-time extraction of LLM emotion tags (`[happy]`, `[sad]`, `[angry]`, `[neutral]`) routing speech to the matching voice model.
+- **Verbose Latency Profiling**: Pass `--verbose` or `-v` (e.g. `./run-with-emotion.sh --verbose`) to display a live latency timeline panel comparing turn latency against README target benchmarks, along with a turn breakdown on exit.
 
 ### Tuning
 

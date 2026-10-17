@@ -1,4 +1,4 @@
-"""Rich-based terminal UI for Emotional Voice Assistant with real-time emotion badges and thread status."""
+"""Rich-based terminal UI for Emotional Voice Assistant with real-time emotion badges, thread status, and benchmark profiling."""
 from __future__ import annotations
 
 import threading
@@ -19,6 +19,13 @@ from services.stt.src import STTListener
 
 StatusType = Literal["READY", "LISTENING", "PROCESSING"]
 
+# Targets defined in README.md benchmarks (based on warm turn measurements)
+README_TARGET_GATE = 0.40          # Sentence gate wait (0.4s complete to ~1.4s trailing)
+README_TARGET_FIRST_TOKEN = 0.45    # LLM first token
+README_TARGET_LLM_FULL = 1.47       # LLM full reply
+README_TARGET_TTS_FIRST = 1.82      # Pocket TTS opening sentence synthesis
+README_TARGET_E2E = 2.10           # End-to-end latency (speech end to sound from speaker)
+
 EMOTION_STYLES: dict[str, dict[str, str]] = {
     "neutral": {"color": "cyan", "icon": "✦", "bg": "on blue"},
     "happy": {"color": "bright_yellow", "icon": "🌟", "bg": "on yellow"},
@@ -27,8 +34,18 @@ EMOTION_STYLES: dict[str, dict[str, str]] = {
 }
 
 
+def _format_diff(observed: float, target: float) -> str:
+    diff = observed - target
+    if diff <= 0.05:
+        return f"[bold green]{diff:+.2f}s (Faster! ✓)[/bold green]"
+    elif diff <= 0.35:
+        return f"[green]{diff:+.2f}s (On Target)[/green]"
+    else:
+        return f"[yellow]{diff:+.2f}s (Slower)[/yellow]"
+
+
 class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
-    """Rich UI controller displaying dynamic emotion badges, active threads, and memory status."""
+    """Rich UI controller displaying dynamic emotion badges, active threads, memory status, and latency benchmarks."""
 
     def __init__(self, gender: str = "female", verbose: bool = False) -> None:
         self.gender = gender.capitalize()
@@ -41,8 +58,23 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
         self._history: list[dict[str, str]] = []
         self._current_user: str = ""
         self._current_assistant: str = ""
+        self._user_fragments: list[str] = []
+        self._pending_user_turn: str = ""
+        self._llm_generated_text: str = ""
         self._is_generating: bool = False
         self._is_playing_audio: bool = False
+
+        # Latency tracking timestamps for verbose mode
+        self._t_speech_start: float | None = None
+        self._t_speech_end: float | None = None
+        self._t_gate_fired: float | None = None
+        self._t_first_token: float | None = None
+        self._t_llm_done: float | None = None
+        self._t_playback_start: float | None = None
+        self._t_playback_end: float | None = None
+
+        self._latest_benchmark: dict | None = None
+        self._benchmarks: list[dict] = []
 
         self._wave_frames = [
             " ▂▃▅▆▇▆▅▃ ",
@@ -74,24 +106,54 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
 
     def on_transcript_started(self, text: str) -> None:
         with self._lock:
+            if self._status == "READY":
+                self._user_fragments.clear()
+                self._pending_user_turn = ""
             self._status = "LISTENING"
-            self._current_user = text
+            prefix = " ".join(self._user_fragments)
+            clean_text = text.strip()
+            self._current_user = f"{prefix} {clean_text}".strip() if prefix else clean_text
+            if self._t_speech_start is None:
+                self._t_speech_start = time.perf_counter()
 
     def on_transcript_updated(self, text: str) -> None:
         with self._lock:
             self._status = "LISTENING"
-            self._current_user = text
+            prefix = " ".join(self._user_fragments)
+            clean_text = text.strip()
+            self._current_user = f"{prefix} {clean_text}".strip() if prefix else clean_text
 
     def on_transcript_completed(self, text: str) -> None:
+        clean_text = text.strip()
         with self._lock:
-            self._current_user = text
-            self._status = "PROCESSING"
+            if clean_text:
+                self._user_fragments.append(clean_text)
+                self._current_user = " ".join(self._user_fragments)
+                self._pending_user_turn = self._current_user
+                self._t_speech_end = time.perf_counter()
 
     def on_user_turn(self, text: str) -> None:
+        clean_text = text.strip()
         with self._lock:
-            self._current_user = text
             self._status = "PROCESSING"
+            self._t_gate_fired = time.perf_counter()
+            self._t_first_token = None
+            self._t_llm_done = None
+            self._t_playback_start = None
+            self._t_playback_end = None
+            final_user = (
+                clean_text
+                or self._pending_user_turn.strip()
+                or " ".join(self._user_fragments).strip()
+                or self._current_user.strip()
+            )
+            if final_user:
+                self._history.append({"role": "user", "text": final_user, "emotion": ""})
+            self._pending_user_turn = ""
+            self._user_fragments.clear()
+            self._current_user = ""
             self._current_assistant = ""
+            self._llm_generated_text = ""
 
     # ------------------------------------------------------------------
     # LLMListener
@@ -106,6 +168,11 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
 
     def on_generation_updated(self, text: str) -> None:
         with self._lock:
+            now = time.perf_counter()
+            if self._t_first_token is None:
+                self._t_first_token = now
+            self._status = "PROCESSING"
+            self._llm_generated_text = text
             self._current_assistant = text
             detected = extract_turn_emotion(text)
             if detected:
@@ -113,13 +180,18 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
 
     def on_generation_completed(self, text: str) -> None:
         with self._lock:
+            now = time.perf_counter()
             self._is_generating = False
+            self._t_llm_done = now
+            self._llm_generated_text = text.strip() or self._llm_generated_text.strip()
             clean_text = strip_emotion_tags(text)
             detected = extract_turn_emotion(text)
-            if self._current_user:
-                self._history.append({"role": "user", "text": self._current_user, "emotion": ""})
-            self._history.append({"role": "assistant", "text": clean_text, "emotion": detected or self._active_emotion})
-            self._current_user = ""
+            if clean_text:
+                self._history.append({
+                    "role": "assistant",
+                    "text": clean_text,
+                    "emotion": detected or self._active_emotion,
+                })
             self._current_assistant = ""
             self._status = "READY"
 
@@ -129,16 +201,80 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
 
     def on_playback_started(self) -> None:
         with self._lock:
+            now = time.perf_counter()
+            if self._t_playback_start is None:
+                self._t_playback_start = now
             self._is_playing_audio = True
+
+    def on_playback_text_updated(self, text: str) -> None:
+        with self._lock:
+            self._status = "PROCESSING"
+            self._current_assistant = text
 
     def on_playback_completed(self) -> None:
         with self._lock:
+            now = time.perf_counter()
             self._is_playing_audio = False
+            self._t_playback_end = now
+
+            # Record benchmark metrics
+            last_user_text = "Unknown"
+            for item in reversed(self._history):
+                if item["role"] == "user":
+                    last_user_text = item["text"]
+                    break
+
+            last_ast_text = "Unknown"
+            for item in reversed(self._history):
+                if item["role"] == "assistant":
+                    last_ast_text = item["text"]
+                    break
+
+            t_speech_end = self._t_speech_end or (self._t_gate_fired or now)
+            t_gate = self._t_gate_fired or t_speech_end
+            gate_dur = max(0.0, t_gate - t_speech_end)
+
+            t_first_tok = self._t_first_token or t_gate
+            first_tok_dur = max(0.0, t_first_tok - t_gate)
+
+            t_llm_done = self._t_llm_done or (t_first_tok + 1.0)
+            llm_full_dur = max(0.0, t_llm_done - t_gate)
+
+            t_play_start = self._t_playback_start or now
+            tts_first_dur = max(0.0, t_play_start - t_gate)
+            e2e_dur = max(0.0, t_play_start - t_speech_end)
+            total_dur = max(0.0, now - t_speech_end)
+
+            benchmark = {
+                "user_text": last_user_text,
+                "assistant_text": last_ast_text,
+                "gate_dur": gate_dur,
+                "first_token_dur": first_tok_dur,
+                "full_llm_dur": llm_full_dur,
+                "tts_first_dur": tts_first_dur,
+                "e2e_dur": e2e_dur,
+                "total_dur": total_dur,
+            }
+            self._latest_benchmark = benchmark
+            self._benchmarks.append(benchmark)
+
+            self._t_speech_start = None
+            self._t_speech_end = None
+            self._t_gate_fired = None
+            self._t_first_token = None
+            self._t_llm_done = None
+            self._t_playback_start = None
+            self._t_playback_end = None
 
     @property
     def history(self) -> list[dict[str, str]]:
         with self._lock:
             return list(self._history)
+
+    @property
+    def benchmarks(self) -> list[dict]:
+        with self._lock:
+            return list(self._benchmarks)
 
     # ------------------------------------------------------------------
     # UI Rendering
@@ -153,13 +289,23 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
             active_emotion = self._active_emotion
             is_playing = self._is_playing_audio
             statuses = dict(self._worker_statuses)
+            latest_bm = self._latest_benchmark
+            verbose = self._verbose
 
         layout = Layout()
-        layout.split_column(
-            Layout(name="header", size=4),
-            Layout(name="body", ratio=1),
-            Layout(name="footer", size=8),
-        )
+        if verbose:
+            layout.split_column(
+                Layout(name="header", size=4),
+                Layout(name="body", ratio=1),
+                Layout(name="benchmark", size=9),
+                Layout(name="footer", size=7),
+            )
+        else:
+            layout.split_column(
+                Layout(name="header", size=4),
+                Layout(name="body", ratio=1),
+                Layout(name="footer", size=7),
+            )
 
         # Header
         e_info = EMOTION_STYLES.get(active_emotion, EMOTION_STYLES["neutral"])
@@ -186,7 +332,7 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
         header_table.add_row(title, gender_badge, emotion_badge)
         layout["header"].update(Panel(header_table, border_style="cyan"))
 
-        # Body: History + Active Turn
+        # Body: History + Voice Model Threads
         body_layout = Layout()
         body_layout.split_row(
             Layout(name="conversation", ratio=2),
@@ -194,7 +340,7 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
         )
 
         chat_table = Table.grid(expand=True, padding=(0, 1))
-        chat_table.add_column(style="dim", width=12)
+        chat_table.add_column(style="dim", width=14)
         chat_table.add_column(style="white", ratio=1)
 
         for msg in history[-6:]:
@@ -220,7 +366,7 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
             )
 
         body_layout["conversation"].update(
-            Panel(chat_table, title="[bold]Conversation[/bold]", border_style="dim white")
+            Panel(chat_table, title="[bold]💬 Real-Time Conversation[/bold]", border_style="dim white")
         )
 
         # Right pane: Emotion Voice Models & Thread Status
@@ -248,9 +394,67 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
             models_table.add_row(f"[{emo_style}]{emo.capitalize()}[/{emo_style}]", ram_label, status_label)
 
         body_layout["models"].update(
-            Panel(models_table, title=f"[bold]Voice Models ({self.gender})[/bold]", border_style="magenta")
+            Panel(models_table, title=f"[bold]🧠 Voice Models ({self.gender})[/bold]", border_style="magenta")
         )
         layout["body"].update(body_layout)
+
+        # Benchmark Timeline Panel (if verbose)
+        if verbose:
+            if latest_bm:
+                tb = Table(box=None, padding=(0, 2), expand=True)
+                tb.add_column("Pipeline Stage", style="bold cyan")
+                tb.add_column("Observed", justify="right", style="bold white")
+                tb.add_column("README Benchmark", justify="right", style="dim white")
+                tb.add_column("Performance vs Benchmark", justify="left")
+
+                tb.add_row(
+                    "1. Sentence Gate",
+                    f"{latest_bm['gate_dur']:.2f} s",
+                    f"{README_TARGET_GATE:.2f} s",
+                    _format_diff(latest_bm['gate_dur'], README_TARGET_GATE),
+                )
+                tb.add_row(
+                    "2. LLM First Token",
+                    f"{latest_bm['first_token_dur']:.2f} s",
+                    f"{README_TARGET_FIRST_TOKEN:.2f} s",
+                    _format_diff(latest_bm['first_token_dur'], README_TARGET_FIRST_TOKEN),
+                )
+                tb.add_row(
+                    "3. LLM Full Reply",
+                    f"{latest_bm['full_llm_dur']:.2f} s",
+                    f"{README_TARGET_LLM_FULL:.2f} s",
+                    _format_diff(latest_bm['full_llm_dur'], README_TARGET_LLM_FULL),
+                )
+                tb.add_row(
+                    "4. TTS First Speech",
+                    f"{latest_bm['tts_first_dur']:.2f} s",
+                    f"{README_TARGET_TTS_FIRST:.2f} s",
+                    _format_diff(latest_bm['tts_first_dur'], README_TARGET_TTS_FIRST),
+                )
+                tb.add_row(
+                    "5. Total E2E Latency",
+                    f"{latest_bm['e2e_dur']:.2f} s",
+                    f"{README_TARGET_E2E:.2f} s",
+                    _format_diff(latest_bm['e2e_dur'], README_TARGET_E2E),
+                )
+
+                bm_panel = Panel(
+                    tb,
+                    title=f"⏱️ Turn Latency Timeline (Last Turn E2E: {latest_bm['e2e_dur']:.2f}s)",
+                    border_style="magenta",
+                )
+            else:
+                waiting_text = Text.from_markup(
+                    "  [dim italic]Awaiting first voice interaction... "
+                    f"Target benchmarks from README: E2E ~{README_TARGET_E2E}s | Gate ~{README_TARGET_GATE}s | "
+                    f"LLM Token ~{README_TARGET_FIRST_TOKEN}s | TTS Speech ~{README_TARGET_TTS_FIRST}s[/dim italic]"
+                )
+                bm_panel = Panel(
+                    Align.center(waiting_text),
+                    title="⏱️ Turn Latency Timeline (vs README Benchmarks)",
+                    border_style="magenta",
+                )
+            layout["benchmark"].update(bm_panel)
 
         # Footer: Status bar & Waveform
         spinner = self._spinner_frames[frame_idx % len(self._spinner_frames)]

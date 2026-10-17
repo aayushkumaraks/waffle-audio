@@ -243,5 +243,41 @@ class TestLLMProviderEmotionPrompt(unittest.TestCase):
         self.assertEqual(req["messages"][0]["content"], LLMProvider.EMOTION_SYSTEM_PROMPT)
 
 
+class TestEmotionConversationUI(unittest.TestCase):
+    def test_ui_instantiation_and_listener_interface(self) -> None:
+        """Verify EmotionConversationUI instantiates and implements all AudioPlaybackListener methods."""
+        from services.conversation.src.emotion_ui import EmotionConversationUI
+
+        ui = EmotionConversationUI(gender="female", verbose=True)
+        self.assertEqual(ui.gender, "Female")
+
+        # Test STT events
+        ui.on_transcript_started("hello")
+        ui.on_transcript_updated("hello there")
+        ui.on_transcript_completed("hello there")
+        ui.on_user_turn("hello there")
+
+        # Test LLM events
+        ui.on_generation_started()
+        ui.on_generation_updated("[happy] Glad to assist!")
+        ui.on_generation_completed("[happy] Glad to assist! How are you?")
+
+        # Test Audio Playback Listener events
+        ui.on_playback_started()
+        ui.on_playback_text_updated("Glad to assist!")
+        ui.on_playback_completed()
+
+        # Verify benchmark was recorded
+        self.assertEqual(len(ui.benchmarks), 1)
+        bm = ui.benchmarks[0]
+        self.assertIn("e2e_dur", bm)
+        self.assertIn("gate_dur", bm)
+
+        # Test rendering
+        layout = ui.render(0)
+        self.assertIsNotNone(layout)
+        self.assertIsNotNone(layout["benchmark"])
+
+
 if __name__ == "__main__":
     unittest.main()
