@@ -19,6 +19,38 @@ Or start the CLI app directly with `uv`:
 uv run python -m services.conversation.cli
 ```
 
+---
+
+## Emotional Voice Assistant (Multi-Emotion Voice Models)
+
+Run the emotion-aware voice assistant with dynamic emotion detection, dedicated per-emotion worker threads, in-memory caching, and automatic idle offloading:
+
+```bash
+./run-with-emotion.sh
+```
+
+On Windows:
+```cmd
+run-with-emotion.bat
+```
+
+Or start directly with `uv`:
+```bash
+# Interactive gender selection:
+uv run python -m services.conversation.emotion_cli
+
+# Specify gender explicitly (female or male):
+uv run python -m services.conversation.emotion_cli --gender female
+uv run python -m services.conversation.emotion_cli --gender male
+```
+
+### Emotion Features
+- **Gender Voice Selection**: Choose either **Female** or **Male** voice model set at startup.
+- **4 Emotion States**: Every emotion (`neutral`, `happy`, `sad`, `angry`) has its own `.safetensors` model in `cloned_voices/`.
+- **Thread-Per-Emotion Workers**: Each emotion model runs in a dedicated thread (`tts-worker-neutral`, `tts-worker-happy`, `tts-worker-sad`, `tts-worker-angry`).
+- **In-Memory Caching with Automatic Offloading**: Models stay in RAM for rapid response and automatically offload to release memory when idle (`--offload-idle <seconds>`).
+- **Real-Time LLM Emotion Tagging & Parsing**: The LLM specifies its emotional tone via tags like `[happy]`, `[sad]`, `[angry]`, or `[neutral]`, which are dynamically parsed to route speech chunks to the matching emotion voice worker.
+
 ### CLI Interface Features
 - **Top-Right Status Badge**: Always shows `● READY`, `🎤 LISTENING`, or `⠋ PROCESSING`.
 - **Real-Time Conversation**: Live speech transcription and streaming voice responses synchronized with audio playback.

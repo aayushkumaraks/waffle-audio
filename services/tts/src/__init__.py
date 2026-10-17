@@ -1,5 +1,6 @@
 """Public exports for the TTS service package."""
 
+from .emotion_tts_service import EmotionTTSService, EmotionVoiceWorker
 from .tts_service import (
     SpeechQueueFull,
     TTSConfig,
@@ -11,6 +12,8 @@ from .tts_service import (
 )
 
 __all__ = [
+    "EmotionTTSService",
+    "EmotionVoiceWorker",
     "SpeechQueueFull",
     "TTSConfig",
     "TTSListener",

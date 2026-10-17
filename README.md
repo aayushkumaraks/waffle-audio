@@ -133,6 +133,24 @@ Record 10-15 seconds from your mic or supply an audio file (`.wav`, `.mp3`). `./
 ./run.sh --voice my_voice
 ```
 
+### Emotional Voice Assistant (One-Click)
+
+Run the emotional voice assistant with dynamic emotion switching, thread-per-emotion models, in-memory caching, and idle offloading:
+
+```bash
+./run-with-emotion.sh
+```
+
+On Windows:
+```cmd
+run-with-emotion.bat
+```
+
+- **Gender Selection**: Select Female or Male at startup.
+- **Emotions Supported**: `neutral`, `happy`, `sad`, `angry`.
+- **Thread-Per-Emotion Workers**: In-memory caching with automatic offload when idle (`--offload-idle 120`).
+- **Live Emotion Parsing**: Real-time extraction of LLM emotion tags (`[happy]`, `[sad]`, `[angry]`, `[neutral]`) routing speech to the matching voice model.
+
 ### Tuning
 
 | Environment variable | Default | Purpose |
