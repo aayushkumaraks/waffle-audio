@@ -4,6 +4,5 @@ voiceModels/
 tools/api-tester
 node_modules/
 logs/
-cloned_voices/*.safetensors
 cloned_voices/*.wav
 voices/

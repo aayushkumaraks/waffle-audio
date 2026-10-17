@@ -133,6 +133,32 @@ Record 10-15 seconds from your mic or supply an audio file (`.wav`, `.mp3`). `./
 ./run.sh --voice my_voice
 ```
 
+### Emotional Voice Assistant (One-Click)
+
+Run the emotional voice assistant with dynamic emotion switching, thread-per-emotion models, in-memory caching, and idle offloading:
+
+```bash
+./run-with-emotion.sh
+```
+
+On Windows:
+```cmd
+run-with-emotion.bat
+```
+
+> [!WARNING]
+> **Status: Experimental & Unstable**
+> The multi-emotion voice assistant is an experimental feature currently under active development. Thread-per-emotion workers, prompt-based emotion state parsing, and memory offloading may exhibit instability depending on your local machine and Ollama model quantization.
+
+- **Gender Selection**: Select Female or Male at startup (or pass `--gender female` / `--gender male`).
+- **Emotions Supported**: `neutral`, `happy`, `sad`, `angry` (sourced from CREMA-D dataset).
+- **How It Works**:
+  1. Each emotion model (`.safetensors`) is loaded in its own background worker thread (`tts-worker-neutral`, `tts-worker-happy`, etc.) and cached in RAM.
+  2. The LLM is prompted to prepend emotional tags (`[happy]`, `[sad]`, `[angry]`, `[neutral]`).
+  3. `EmotionParser` strips the tags from spoken audio in real-time and routes each sentence chunk to the corresponding emotion thread.
+  4. Non-neutral models automatically offload their memory tensors if idle beyond `--offload-idle <seconds>`, keeping system RAM free and auto-reloading upon demand.
+- **Verbose Latency Profiling**: Pass `--verbose` or `-v` (e.g. `./run-with-emotion.sh --verbose`) to display a live latency timeline panel comparing turn latency against README target benchmarks, along with a turn breakdown on exit.
+
 ### Tuning
 
 | Environment variable | Default | Purpose |
