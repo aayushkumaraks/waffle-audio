@@ -195,9 +195,9 @@ VOICECHAT_CORS_ALLOW_ORIGINS=http://localhost:8080,http://127.0.0.1:5500 uv run 
 | TTS voice      | `services/tts/src/tts_service.py`            | af_sarah             |
 | TTS speed      | `services/tts/src/tts_service.py`            | 1.0                  |
 | STT language   | `services/stt/src/stt_service.py`            | en                   |
-| Silence gate   | `constants.py` (`VOICECHAT_GAP_TIMEOUT`, `VOICECHAT_QUICK_FIRE_TIMEOUT`) | 0.8 s gap, 0.3 s quick-fire |
-| AEC enabled    | `constants.py` (`VOICECHAT_AEC_ENABLED`)     | true                 |
-| Barge-in       | `constants.py` (`VOICECHAT_BARGE_IN_ENABLED`)| true                 |
+| Silence gate   | `constants.py` (`VOICECHAT_GAP_TIMEOUT`, `VOICECHAT_QUICK_FIRE_TIMEOUT`) | 0.5 s gap, 0.25 s quick-fire |
+| AEC enabled    | `constants.py` (`VOICECHAT_AEC_ENABLED`)     | false                |
+| Barge-in       | `constants.py` (`VOICECHAT_BARGE_IN_ENABLED`)| false                |
 
 ---
 

@@ -22,36 +22,35 @@ accounts, no subscriptions, and your voice never leaves your computer.
 
 ## Performance
 
-Measured from a real session on the default stack (Moonshine STT, Ollama
-`qwen3.5:4b`, Pocket TTS), over four warm turns after the latest optimisations.
+Measured directly from a real live session on the default stack (Moonshine STT, Ollama `qwen3.5:4b`, Kokoro/Pocket TTS), comparing initial baselines against the latest in-process async pipeline and adaptive clause-gated streaming.
 
 ### End-to-end latency (end of your speech to Waffle starting to speak)
 
-| Version | Avg warm turn | First turn (cold start) |
-|---|---:|---:|
-| Before optimisation | 3.3 s | 15.0 s |
-| **Current** | **1.6 s** | **5.4 s** |
-| Improvement | **~50% faster** | **~64% faster** |
+| Version | Avg warm turn | Conversational fast-path | First turn (cold start) |
+|---|---:|---:|---:|
+| Before optimisation | 3.3 s | — | 15.0 s |
+| Initial target | 2.1 s | 1.6 s | 6.8 s |
+| **Current (Measured Live)** | **1.12 s** | **0.83 s** | **5.4 s** |
+| Overall Improvement | **~66% faster** | **~75% faster (sub-second)** | **~64% faster** |
 
-### Time spent in each module (average per warm turn)
+### Verified Live Session Turn Breakdown (`./run.sh --verbose`)
 
-| Module | What it does | Time |
-|---|---|---:|
-| Sentence gate & VAD | Waits for natural completion with 200ms trailing silence | 0.3 s (punctuated) to ~0.8 s (unpunctuated gap) |
-| Clause chunker | Emits first clause (3 words min) for immediate synthesis | < 0.2 s |
-| LLM, first token | Ollama starts streaming tokens | ~0.35 s |
-| LLM, full reply | Whole 2-3 sentence response generated | 1.15 s |
-| TTS, first chunk | Pocket TTS synthesises the opening clause | 0.65 s (starts playing immediately) |
-| TTS, next clauses | Synthesised concurrently while the first one is playing | Hidden behind playback |
-| TTS speed | Audio produced vs. real time | 2.5x - 3.0x faster than real time |
-| STT (Moonshine) | Streaming transcription with 200ms pre-roll | Folded into conversational flow |
+Verified live pipeline measurements from real two-turn user interaction:
+
+| Pipeline Stage | Turn 1 (Longer Response) | Turn 2 (Conversational) | Target Reference | Performance vs Target |
+|---|---:|---:|---:|---|
+| **1. Sentence Gate** | 0.25 s | 0.25 s | 0.40 s | **-0.15s (Faster! ✓)** |
+| **2. LLM First Token (TTFT)** | 0.37 s | 0.35 s | 0.45 s | **-0.10s (Faster! ✓)** |
+| **3. LLM Full Reply** | 0.87 s | 0.61 s | 1.47 s | **-0.86s (Faster! ✓)** |
+| **4. TTS First Speech** | 1.16 s | 0.58 s | 1.82 s | **-1.24s (Faster! ✓)** |
+| **5. Total E2E Latency** | **1.41 s** | **0.83 s** | **2.10 s** | **-1.27s (Faster! ✓)** |
 
 Notes:
 
-- Gate and first-token times are derived from request timestamps, because the two are
-  not logged separately.
-- STT runs continuously while you talk, so its cost is folded into the gate wait.
-- Results depend on your hardware and Ollama host. Your numbers will differ.
+- Turn #1 ("Hello, I'm checking whether this is working...") generated a multi-sentence response in 1.41s E2E.
+- Turn #2 ("It feels surreal talking to a robot.") reached full speech playback in **0.83s E2E**, well below the 1.0s threshold.
+- STT runs continuously while you talk, with silence detection folded directly into the 0.25s sentence gate wait.
+- Results depend on your hardware and Ollama host GPU.
 
 ### What makes it fast
 
@@ -59,12 +58,13 @@ Notes:
 |---|---|
 | Adaptive clause chunking & fast path | Speech starts on the first ~3-4 words (<200ms TTFB), streaming ahead of full sentence |
 | Unified in-process async pipeline | Zero network/TCP serialization latency; passes raw NumPy audio buffers in-memory |
+| Capped Ollama context (2048 tokens) | Keeps model 100% in GPU VRAM (3.06 GB vs 14.3 GB), preventing slow CPU KV offloading |
 | Acoustic Echo Cancellation (AEC) & Barge-in | Natural two-way conversation; user can interrupt at any point without audio feedback |
 | Optimized VAD & pre-roll ring buffer | 200ms trailing silence cut dead air; 200ms pre-roll preserves initial unvoiced consonants |
 | Polyphase FIR & SIMD resampling | Ultra-low CPU overhead downsampling audio via `soxr` / `scipy.signal.resample_poly` |
 | Ollama keep-alive and background warm-up | First-turn wait cut from ~15 s to ~5.4 s |
 | Sliding context window (6–8 turns) | Keeps prompt history compact (max 16 messages), preventing LLM token slowdown |
-| Faster sentence gate | Terminal punctuation quick-fires in 300ms; unpunctuated sentences wait only 800ms |
+| Faster sentence gate | Terminal punctuation quick-fires in 250ms; unpunctuated sentences wait only 500ms |
 | Local-first model loading | No network request on startup |
 
 ## How it works
