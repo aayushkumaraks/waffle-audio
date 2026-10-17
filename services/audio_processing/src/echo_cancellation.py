@@ -8,6 +8,7 @@ loudspeakers without headphones.
 from __future__ import annotations
 
 import logging
+import threading
 from collections import deque
 from dataclasses import dataclass
 from typing import Protocol
@@ -57,6 +58,7 @@ class AcousticEchoCanceller:
         self._weights = np.zeros(self._filter_len, dtype=np.float32)
         self._ref_buffer = np.empty(0, dtype=np.float32)
         self._ref_history = deque(maxlen=self._filter_len * 4)
+        self._lock = threading.Lock()
 
     def feed_reference(self, reference_audio: AudioBuffer, sample_rate: int) -> None:
         """Buffer speaker playback audio for echo cancellation."""
@@ -68,11 +70,12 @@ class AcousticEchoCanceller:
             sample_rate,
             self._config.sample_rate,
         )
-        self._ref_buffer = np.concatenate((self._ref_buffer, ref_16k))
-        # Keep reference buffer bounded to ~1.0 second
-        max_samples = self._config.sample_rate
-        if self._ref_buffer.size > max_samples:
-            self._ref_buffer = self._ref_buffer[-max_samples:]
+        with self._lock:
+            self._ref_buffer = np.concatenate((self._ref_buffer, ref_16k))
+            # Keep reference buffer bounded to ~1.0 second
+            max_samples = self._config.sample_rate
+            if self._ref_buffer.size > max_samples:
+                self._ref_buffer = self._ref_buffer[-max_samples:]
 
     def process(self, microphone_audio: AudioBuffer, sample_rate: int) -> AudioBuffer:
         """Cancel acoustic echo from microphone input using NLMS adaptive filtering."""
@@ -86,15 +89,16 @@ class AcousticEchoCanceller:
         )
 
         n_samples = len(mic_16k)
-        if self._ref_buffer.size < n_samples:
-            # Not enough reference audio available yet; pad with silence
-            ref_slice = np.zeros(n_samples, dtype=np.float32)
-            if self._ref_buffer.size > 0:
-                ref_slice[-self._ref_buffer.size :] = self._ref_buffer
-                self._ref_buffer = np.empty(0, dtype=np.float32)
-        else:
-            ref_slice = self._ref_buffer[:n_samples]
-            self._ref_buffer = self._ref_buffer[n_samples:]
+        with self._lock:
+            buf_len = len(self._ref_buffer)
+            if buf_len < n_samples:
+                ref_slice = np.zeros(n_samples, dtype=np.float32)
+                if buf_len > 0:
+                    ref_slice[n_samples - buf_len:] = self._ref_buffer
+                    self._ref_buffer = np.empty(0, dtype=np.float32)
+            else:
+                ref_slice = self._ref_buffer[:n_samples].copy()
+                self._ref_buffer = self._ref_buffer[n_samples:]
 
         # Run adaptive NLMS filter
         cleaned = np.zeros(n_samples, dtype=np.float32)
@@ -137,9 +141,10 @@ class AcousticEchoCanceller:
 
     def reset(self) -> None:
         """Reset internal filter weights and reference buffer."""
-        self._weights.fill(0.0)
-        self._ref_buffer = np.empty(0, dtype=np.float32)
-        self._ref_history.clear()
+        with self._lock:
+            self._weights.fill(0.0)
+            self._ref_buffer = np.empty(0, dtype=np.float32)
+            self._ref_history.clear()
 
 
 class PassthroughEchoCanceller:

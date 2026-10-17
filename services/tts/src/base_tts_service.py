@@ -13,6 +13,16 @@ class BaseTTSService(ABC):
         self._speech_queue: queue.Queue[str | object] = queue.Queue(config.queue_size)
         self._worker_thread: threading.Thread | None = None
         self._engine_lock, self._started = threading.Lock(), False
+        # Number of texts queued or currently being synthesized.
+        self._pending, self._pending_lock = 0, threading.Lock()
+        # Bumped on interrupt so in-flight synthesis stops emitting audio.
+        self._epoch = 0
+    @property
+    def is_busy(self) -> bool:
+        """True while any text is queued or still being synthesized."""
+        with self._pending_lock: return self._pending > 0
+    def _change_pending(self, delta: int) -> None:
+        with self._pending_lock: self._pending = max(0, self._pending + delta)
     def start(self) -> None:
         if self._started: raise ServiceAlreadyStarted("TTSService is already started.")
         self._load_engine(); self._started = True
@@ -25,18 +35,26 @@ class BaseTTSService(ABC):
         self._worker_thread = None; self._unload_engine(); self._started = False
     def speak(self, text: str) -> None:
         if not self._started: raise ServiceNotStarted("TTSService is not started.")
+        self._change_pending(1)
         try: self._speech_queue.put_nowait(text)
-        except queue.Full as exc: raise SpeechQueueFull("Speech queue is full.") from exc
+        except queue.Full as exc:
+            self._change_pending(-1)
+            raise SpeechQueueFull("Speech queue is full.") from exc
     def interrupt(self) -> None:
-        """Purge pending text from the speech queue for instant barge-in."""
-        while not self._speech_queue.empty():
+        """Purge pending text and stop the in-flight synthesis for instant barge-in."""
+        self._epoch += 1
+        stop_seen = False
+        while True:
             try:
                 item = self._speech_queue.get_nowait()
-                if item is _STOP:
-                    self._speech_queue.put_nowait(_STOP)
-                    break
             except queue.Empty:
                 break
+            if item is _STOP:
+                stop_seen = True
+                continue
+            self._change_pending(-1)
+        if stop_seen:
+            self._speech_queue.put_nowait(_STOP)
 
     def add_listener(self, listener: TTSListener) -> None:
         if listener not in self._listeners: self._listeners.append(listener)
@@ -52,17 +70,23 @@ class BaseTTSService(ABC):
         while True:
             item = self._speech_queue.get()
             if item is _STOP: return
+            epoch = self._epoch
             try:
                 with self._engine_lock:
                     self._dispatch_synthesis_started()
                     chunks, rate = self._stream_audio(item)
                     first = True
                     for audio in chunks:
+                        if self._epoch != epoch:
+                            break  # interrupted: drop the rest of this utterance
                         self._dispatch_audio_chunk(audio, rate, text=item if first else "")
                         first = False
-                    self._dispatch_synthesis_completed()
             except Exception:
                 logger.exception("Speech synthesis failed.")
+            finally:
+                # Decrement before signalling completion so listeners that
+                # check is_busy inside on_synthesis_completed see the final state.
+                self._change_pending(-1)
                 self._dispatch_synthesis_completed()
     def _dispatch_synthesis_started(self) -> None:
         for listener in tuple(self._listeners): listener.on_synthesis_started()

@@ -138,14 +138,12 @@ class UnifiedPipeline:
             cleaned_audio = resample_audio(cleaned_audio, sample_rate, 16000)
             sample_rate = 16000
 
-        # 2. Voice Activity Detection
-        speech_audio = self.vad.process(cleaned_audio, sample_rate)
-        if speech_audio.size == 0:
-            return
+        # 2. Voice Activity Detection (monitors speech start/end for barge-in)
+        self.vad.process(cleaned_audio, sample_rate)
 
-        # 3. Moonshine STT
+        # 3. Moonshine STT (requires continuous audio including silence to finalize lines)
         try:
-            self.stt.push(speech_audio, sample_rate)
+            self.stt.push(cleaned_audio, sample_rate)
         except AudioQueueFull:
             pass
 

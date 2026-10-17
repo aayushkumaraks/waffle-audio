@@ -159,8 +159,15 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
         clean_text = text.strip()
         with self._lock:
             if clean_text:
-                self._pending_user_turn = clean_text
-                self._current_user = clean_text
+                self._status = "PROCESSING"
+                self._is_generating = True
+                self._t_gate_fired = time.perf_counter()
+                self._history.append({"role": "user", "text": clean_text})
+                self._pending_user_turn = ""
+                self._user_fragments.clear()
+                self._current_user = ""
+                self._current_assistant = ""
+                self._llm_generated_text = ""
 
     # ------------------------------------------------------------------
     # LLM Listener callbacks
@@ -171,18 +178,20 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
             now = time.perf_counter()
             self._status = "PROCESSING"
             self._is_generating = True
-            self._t_gate_fired = now
+            if self._t_gate_fired is None:
+                self._t_gate_fired = now
             self._t_first_token = None
             self._t_llm_done = None
             self._t_playback_start = None
             self._t_playback_end = None
 
+            # Fallback if on_user_turn was not invoked (e.g. direct LLM test)
             final_user = (
                 self._pending_user_turn.strip()
                 or " ".join(self._user_fragments).strip()
                 or self._current_user.strip()
             )
-            if final_user:
+            if final_user and (not self._history or self._history[-1].get("text") != final_user):
                 self._history.append({"role": "user", "text": final_user})
             self._pending_user_turn = ""
             self._user_fragments.clear()
@@ -223,52 +232,81 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
 
     def on_playback_completed(self) -> None:
         with self._lock:
+            if self._is_generating:
+                # Playback drained while the LLM is still streaming the next
+                # clause; the response turn is not over yet.
+                return
             now = time.perf_counter()
             self._t_playback_end = now
             full_text = self._current_assistant.strip() or self._llm_generated_text.strip()
             if full_text:
                 self._history.append({"role": "assistant", "text": full_text})
 
-            # Calculate and record benchmark metrics
-            last_user_text = (
-                self._history[-2]["text"] if len(self._history) >= 2 else "Unknown"
-            )
+                # Record benchmark metrics only if real playback occurred
+                if self._t_playback_start is not None:
+                    last_user_text = (
+                        self._history[-2]["text"] if len(self._history) >= 2 else "Unknown"
+                    )
 
-            t_speech_end = self._t_speech_end or (self._t_gate_fired or now)
-            t_gate = self._t_gate_fired or t_speech_end
-            gate_dur = max(0.0, t_gate - t_speech_end)
+                    t_speech_end = self._t_speech_end or (self._t_gate_fired or now)
+                    t_gate = self._t_gate_fired or t_speech_end
+                    gate_dur = max(0.0, t_gate - t_speech_end)
 
-            t_first_tok = self._t_first_token or t_gate
-            first_tok_dur = max(0.0, t_first_tok - t_gate)
+                    t_first_tok = self._t_first_token or t_gate
+                    first_tok_dur = max(0.0, t_first_tok - t_gate)
 
-            t_llm_done = self._t_llm_done or (t_first_tok + 1.0)
-            llm_full_dur = max(0.0, t_llm_done - t_gate)
+                    t_llm_done = self._t_llm_done or (t_first_tok + 1.0)
+                    llm_full_dur = max(0.0, t_llm_done - t_gate)
 
-            t_play_start = self._t_playback_start or now
-            tts_first_dur = max(0.0, t_play_start - t_gate)
-            e2e_dur = max(0.0, t_play_start - t_speech_end)
-            total_dur = max(0.0, now - t_speech_end)
+                    t_play_start = self._t_playback_start
+                    tts_first_dur = max(0.0, t_play_start - t_gate)
+                    e2e_dur = max(0.0, t_play_start - t_speech_end)
+                    total_dur = max(0.0, now - t_speech_end)
 
-            benchmark = {
-                "user_text": last_user_text,
-                "assistant_text": full_text,
-                "gate_dur": gate_dur,
-                "first_token_dur": first_tok_dur,
-                "full_llm_dur": llm_full_dur,
-                "tts_first_dur": tts_first_dur,
-                "e2e_dur": e2e_dur,
-                "total_dur": total_dur,
-            }
-            self._latest_benchmark = benchmark
-            self._benchmarks.append(benchmark)
+                    benchmark = {
+                        "user_text": last_user_text,
+                        "assistant_text": full_text,
+                        "gate_dur": gate_dur,
+                        "first_token_dur": first_tok_dur,
+                        "full_llm_dur": llm_full_dur,
+                        "tts_first_dur": tts_first_dur,
+                        "e2e_dur": e2e_dur,
+                        "total_dur": total_dur,
+                    }
+                    self._latest_benchmark = benchmark
+                    self._benchmarks.append(benchmark)
 
             self._current_assistant = ""
             self._llm_generated_text = ""
             self._t_speech_start = None
+            self._t_speech_end = None
+            self._t_playback_start = None
             self._user_fragments.clear()
             self._pending_user_turn = ""
             self._current_user = ""
             self._status = "READY"
+
+    def on_barge_in(self) -> None:
+        """Called when the user interrupts the assistant mid-response.
+
+        Commits whatever was already spoken (marked as cut off), clears the
+        in-flight response state, and does not record a benchmark entry.
+        """
+        with self._lock:
+            spoken = self._current_assistant.strip()
+            if spoken:
+                self._history.append({"role": "assistant", "text": f"{spoken} …"})
+            self._current_assistant = ""
+            self._llm_generated_text = ""
+            self._is_generating = False
+            self._t_gate_fired = None
+            self._t_first_token = None
+            self._t_llm_done = None
+            self._t_playback_start = None
+            self._t_playback_end = None
+            self._t_speech_start = None
+            self._t_speech_end = None
+            self._status = "LISTENING"
 
     # ------------------------------------------------------------------
     # Rich Layout Renderer

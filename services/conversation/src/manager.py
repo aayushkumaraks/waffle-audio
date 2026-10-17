@@ -63,6 +63,7 @@ class ConversationManager(LLMListener):
             quick_fire_timeout=quick_fire_timeout,
         )
         self._chunker = ClauseChunker()
+        self._partial_reply = ""
 
         self._started = False
         self._pending_generation = False
@@ -168,11 +169,14 @@ class ConversationManager(LLMListener):
             len(self._history),
         )
 
+        with self._state_lock:
+            self._pending_generation = True
+            self._partial_reply = ""
         try:
             self._llm.generate(self._history)
-            with self._state_lock:
-                self._pending_generation = True
         except queue.Full:
+            with self._state_lock:
+                self._pending_generation = False
             logger.warning(
                 "LLM queue is full — dropping utterance: %s", text
             )
@@ -199,6 +203,7 @@ class ConversationManager(LLMListener):
         with self._state_lock:
             if not self._pending_generation:
                 return
+            self._partial_reply = text
 
         for chunk in self._chunker.process_stream(text):
             self._speak(chunk)
@@ -241,8 +246,17 @@ class ConversationManager(LLMListener):
         """Instantly interrupt assistant speech and ongoing LLM generation."""
         logger.info("Barge-in: interrupting LLM generation and flushing TTS/audio.")
         with self._state_lock:
+            was_pending = self._pending_generation
             self._pending_generation = False
+            partial = self._partial_reply.strip()
+            self._partial_reply = ""
         self._chunker.reset()
+
+        # Keep user/assistant alternation in the LLM context: record the part
+        # of the reply that was generated before the interruption.
+        if was_pending and partial:
+            self._history.append(Message(role="assistant", content=partial))
+            self._prune_history()
 
         # Abort LLM stream if supported
         if hasattr(self._llm, "abort"):

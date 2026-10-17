@@ -29,13 +29,29 @@ OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen3.5:4b")
 OLLAMA_KEEP_ALIVE: str = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
 # Hard cap on reply length (replies are spoken aloud, 2-3 short sentences).
 OLLAMA_NUM_PREDICT: int = _int_from_env("OLLAMA_NUM_PREDICT", 160)
+OLLAMA_NUM_CTX: int = _int_from_env("OLLAMA_NUM_CTX", 2048)
 
 # ---------------------------------------------------------------------------
 # Sentence Gate (silence interval before LLM invocation)
 # ---------------------------------------------------------------------------
 
-SENTENCE_GATE_GAP_TIMEOUT: float = float(os.getenv("VOICECHAT_GAP_TIMEOUT", "0.8"))
-SENTENCE_GATE_QUICK_FIRE_TIMEOUT: float = float(os.getenv("VOICECHAT_QUICK_FIRE_TIMEOUT", "0.3"))
+SENTENCE_GATE_GAP_TIMEOUT: float = float(os.getenv("VOICECHAT_GAP_TIMEOUT", "0.5"))
+SENTENCE_GATE_QUICK_FIRE_TIMEOUT: float = float(os.getenv("VOICECHAT_QUICK_FIRE_TIMEOUT", "0.25"))
+
+# ---------------------------------------------------------------------------
+# Barge-in / echo cancellation (experimental, opt-in)
+#
+# When disabled (default) the CLI microphone is muted while the assistant is
+# speaking, so the assistant can never hear and answer itself.  When enabled,
+# the microphone stays live during playback for interruption detection; this
+# needs headphones or a good acoustic setup, because the software echo
+# canceller cannot fully remove loudspeaker echo.
+# ---------------------------------------------------------------------------
+
+_TRUTHY = {"1", "true", "yes", "on"}
+
+BARGE_IN_ENABLED: bool = os.getenv("VOICECHAT_BARGE_IN_ENABLED", "false").lower() in _TRUTHY
+AEC_ENABLED: bool = os.getenv("VOICECHAT_AEC_ENABLED", "false").lower() in _TRUTHY
 
 # ---------------------------------------------------------------------------
 # Kokoro TTS -- local model files

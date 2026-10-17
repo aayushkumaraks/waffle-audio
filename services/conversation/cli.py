@@ -14,6 +14,7 @@ import sounddevice as sd
 from rich.console import Console
 from rich.live import Live
 
+from constants import AEC_ENABLED, BARGE_IN_ENABLED
 from services.audio.src import AudioPlayer
 from services.conversation.src import ConversationManager, ConversationUI
 from services.conversation.src.ui import (
@@ -60,7 +61,6 @@ def _setup_logging() -> None:
         "onnxruntime",
         "moonshine_voice",
         "urllib3",
-        "services",
         "pocket_tts",
         "kokoro_onnx",
     ]:
@@ -123,6 +123,7 @@ def main() -> None:
     llm = LLMService(provider)
     tts = TTSService(TTSConfig(voice=args.voice))
     player = AudioPlayer()
+    player.set_upstream_busy(lambda: getattr(tts, "is_busy", False))
 
     # Wire echo cancellation reference monitor from playback output
     player.add_playback_monitor(aec.feed_reference)
@@ -136,8 +137,9 @@ def main() -> None:
         manager=manager,
         tts=tts,
         llm=llm,
-        on_barge_in=lambda: ui.sync_audio_playback(False),
+        on_barge_in=ui.on_barge_in,
     )
+    barge_in.enabled = BARGE_IN_ENABLED
     vad.add_listener(barge_in)
 
     # Wire UI listeners to real-time events
@@ -154,13 +156,24 @@ def main() -> None:
     stt.start()
 
     def audio_callback(indata, frames, time_info, status):
+        # When barge-in is disabled, mute microphone while assistant is speaking
+        # to guarantee zero acoustic feedback and prevent the assistant from hearing itself.
+        if not BARGE_IN_ENABLED and player.is_playing:
+            return
         try:
-            # Copy flattened audio to prevent buffer reuse race conditions
             audio = indata.astype(np.float32).flatten()
-            cleaned = aec.process(audio, 16000)
-            speech = vad.process(cleaned, 16000)
-            if speech.size > 0:
-                stt.push(speech, 16000)
+            if BARGE_IN_ENABLED and AEC_ENABLED:
+                cleaned = aec.process(audio, 16000)
+            else:
+                cleaned = audio
+
+            # When barge-in is enabled, run VAD to detect speech onset for interruption
+            if BARGE_IN_ENABLED:
+                vad.process(cleaned, 16000)
+
+            # Moonshine STT requires continuous audio (including silence)
+            # to segment utterances and trigger on_line_completed.
+            stt.push(cleaned, 16000)
         except AudioQueueFull:
             pass
         except Exception:

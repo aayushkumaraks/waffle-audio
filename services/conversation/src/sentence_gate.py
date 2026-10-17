@@ -130,13 +130,22 @@ class SentenceGate:
     def notify_speech_active(self) -> None:
         """Called when new speech is detected or actively streaming.
 
-        Cancels any pending silence timer so the gate never interrupts the
-        user while speech is actively in progress.
+        Postpones the silence timer so the gate never interrupts the
+        user while speech is actively in progress, but ensures any buffered
+        utterance is still dispatched once speech ceases.
         """
         with self._lock:
             if self._pending_timer is not None:
                 self._pending_timer.cancel()
                 self._pending_timer = None
+
+            if self._buffer:
+                accumulated = " ".join(self._buffer)
+                delay = self._compute_delay(accumulated)
+                timer = threading.Timer(delay, self._fire)
+                timer.daemon = True
+                timer.start()
+                self._pending_timer = timer
 
     def submit(self, text: str) -> None:
         """Append a new fragment and reset the silence timer."""
@@ -298,10 +307,6 @@ class ClauseChunker:
                 prefix = subtext[:conj_match.start()]
                 if len(prefix.split()) >= min_conj_words:
                     return conj_match.start()
-
-        # First-chunk fast path: 4-5 words ending on whitespace if no punct yet
-        if is_first and len(words) >= 5 and subtext.endswith(" "):
-            return len(subtext)
 
         return None
 

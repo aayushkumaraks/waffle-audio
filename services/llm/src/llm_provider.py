@@ -8,7 +8,7 @@ from typing import Any, Sequence
 import httpx
 
 from models import Message
-from constants import OLLAMA_BASE_URL, OLLAMA_KEEP_ALIVE, OLLAMA_MODEL, OLLAMA_NUM_PREDICT
+from constants import OLLAMA_BASE_URL, OLLAMA_KEEP_ALIVE, OLLAMA_MODEL, OLLAMA_NUM_CTX, OLLAMA_NUM_PREDICT
 
 logger = logging.getLogger(__name__)
 
@@ -84,10 +84,14 @@ class LLMProvider:
                     "model": self._config.model,
                     "messages": [],
                     "keep_alive": OLLAMA_KEEP_ALIVE,
+                    "options": {
+                        "num_ctx": OLLAMA_NUM_CTX,
+                        "num_predict": OLLAMA_NUM_PREDICT,
+                    },
                 },
-                timeout=httpx.Timeout(120.0),
+                timeout=httpx.Timeout(60.0),
             )
-            logger.info("LLM model warmed up.")
+            logger.info("LLM model warmed up with context length %d.", OLLAMA_NUM_CTX)
         except httpx.HTTPError:
             logger.debug("LLM warm-up failed.", exc_info=True)
 
@@ -183,5 +187,8 @@ class LLMProvider:
             "stream": True,
             "think": False,
             "keep_alive": OLLAMA_KEEP_ALIVE,
-            "options": {"num_predict": OLLAMA_NUM_PREDICT},
+            "options": {
+                "num_ctx": OLLAMA_NUM_CTX,
+                "num_predict": OLLAMA_NUM_PREDICT,
+            },
         }
