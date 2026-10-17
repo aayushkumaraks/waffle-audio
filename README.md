@@ -119,6 +119,20 @@ uv run python -m services.conversation.cli
 - **Verbose Latency Profiling**: Pass `--verbose` (e.g. `./run.sh --verbose`) to show a real-time pipeline latency timeline in the UI and compare against README benchmarks.
 - **Conversation Summary**: Full conversation history and benchmark timeline are displayed when you exit with `Ctrl+C`.
 
+### Voice Cloning & Custom Voices
+
+Clone any voice to give your assistant a custom voice:
+
+```bash
+uv run python clone_voice.py
+```
+
+Record 10-15 seconds from your mic or supply an audio file (`.wav`, `.mp3`). `./run.sh` and `run.bat` automatically detect your cloned voices and prompt you on startup, or you can start with `--voice <name>`:
+
+```bash
+./run.sh --voice my_voice
+```
+
 ### Tuning
 
 | Environment variable | Default | Purpose |

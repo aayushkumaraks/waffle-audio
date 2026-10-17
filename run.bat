@@ -21,5 +21,35 @@ if %ERRORLEVEL% neq 0 (
 echo [2/3] Synchronizing Python environment...
 uv sync
 
+setlocal enabledelayedexpansion
+set "VOICE_OPT="
+
+REM Check if cloned voices exist
+if exist "cloned_voices\*.safetensors" (
+    echo.
+    echo Available Cloned Voices:
+    echo   [0] Default voice
+    set /a idx=0
+    for %%F in (cloned_voices\*.safetensors) do (
+        set /a idx+=1
+        echo   [!idx!] %%~nF ^(cloned^)
+        set "voice_!idx!=%%~nF"
+    )
+    set /p choice="Would you like to use a cloned voice for your assistant? [0-!idx!, default: 0]: "
+    if defined choice (
+        if not "!choice!"=="0" (
+            for /f "tokens=1" %%C in ("!choice!") do (
+                if defined voice_%%C (
+                    for %%V in (!voice_%%C!) do (
+                        echo Using cloned voice: %%V
+                        set "VOICE_OPT=--voice %%V"
+                    )
+                )
+            )
+        )
+    )
+)
+
+echo.
 echo [3/3] Launching Waffle Audio CLI...
-uv run python -m services.conversation.cli %*
+uv run python -m services.conversation.cli %* %VOICE_OPT%

@@ -86,11 +86,17 @@ def main() -> None:
         action="store_true",
         help="Display real-time turn timeline and compare latencies against README benchmarks",
     )
+    parser.add_argument(
+        "--voice",
+        type=str,
+        default=os.getenv("VOICECHAT_TTS_VOICE"),
+        help="Voice to use for TTS (predefined name, cloned voice name from cloned_voices/, or path to .safetensors)",
+    )
     args, _ = parser.parse_known_args()
 
     _setup_logging()
     logger = logging.getLogger(__name__)
-    logger.info("Starting Waffle Audio CLI (verbose=%s)...", args.verbose)
+    logger.info("Starting Waffle Audio CLI (verbose=%s, voice=%s)...", args.verbose, args.voice or "default")
 
     stop_event = threading.Event()
 
@@ -107,7 +113,7 @@ def main() -> None:
     stt = STTService()
     provider = LLMProvider(LLMProviderConfig())
     llm = LLMService(provider)
-    tts = TTSService(TTSConfig())
+    tts = TTSService(TTSConfig(voice=args.voice))
     player = AudioPlayer()
 
     tts.add_listener(player)
