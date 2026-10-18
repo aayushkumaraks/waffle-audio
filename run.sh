@@ -149,4 +149,4 @@ fi
 
 # Launch the CLI application
 echo -e "\n${BOLD}${GREEN}Starting Waffle Audio CLI...${RESET}\n"
-exec uv run python -m services.conversation.cli "$@" "${VOICE_ARG[@]}"
+exec uv run python -u -m services.conversation.cli "$@" "${VOICE_ARG[@]}"

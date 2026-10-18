@@ -9,7 +9,7 @@ from typing import Callable, TypeAlias
 import numpy as np
 import sounddevice as sd
 
-from services.tts.src.tts_service import (
+from services.tts.src.tts_types import (
     AudioBuffer,
     TTSListener,
 )

@@ -8,31 +8,7 @@ import os
 import signal
 import threading
 import time
-
-import numpy as np
-import sounddevice as sd
 from rich.console import Console
-from rich.live import Live
-
-from constants import AEC_ENABLED, BARGE_IN_ENABLED
-from services.audio.src import AudioPlayer
-from services.conversation.src import ConversationManager, ConversationUI
-from services.conversation.src.ui import (
-    README_TARGET_E2E,
-    README_TARGET_FIRST_TOKEN,
-    README_TARGET_GATE,
-    README_TARGET_LLM_FULL,
-    README_TARGET_TTS_FIRST,
-)
-from services.audio_processing.src import (
-    AcousticEchoCanceller,
-    BargeInController,
-    VADConfig,
-    VADService,
-)
-from services.llm.src import LLMProvider, LLMProviderConfig, LLMService
-from services.stt.src import AudioQueueFull, STTService
-from services.tts.src import TTSConfig, TTSService
 
 # Suppress ONNX runtime logging
 os.environ.setdefault("ORT_LOGGING_LEVEL", "3")
@@ -85,6 +61,11 @@ def _suppress_c_stderr():
 
 
 def main() -> None:
+    # 1. Start console and spinner IMMEDIATELY so the user gets instant feedback
+    console = Console()
+    status = console.status("[bold cyan]Initializing Waffle Audio pipeline...[/bold cyan]", spinner="dots")
+    status.start()
+
     parser = argparse.ArgumentParser(description="Waffle Audio Voice Assistant CLI")
     parser.add_argument(
         "-v",
@@ -102,7 +83,20 @@ def main() -> None:
 
     _setup_logging()
     logger = logging.getLogger(__name__)
-    logger.info("Starting Waffle Audio CLI (verbose=%s, voice=%s)...", args.verbose, args.voice or "default")
+
+    # Pipe application and service logs to console during startup alongside spinner
+    class _StartupLogHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            try:
+                msg = self.format(record)
+                console.log(f"[dim]{msg}[/dim]")
+            except Exception:
+                pass
+
+    startup_log_handler = _StartupLogHandler()
+    startup_log_handler.setLevel(logging.INFO)
+    startup_log_handler.setFormatter(logging.Formatter("%(levelname)s [%(name)s]: %(message)s"))
+    logging.getLogger().addHandler(startup_log_handler)
 
     stop_event = threading.Event()
 
@@ -113,74 +107,148 @@ def main() -> None:
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, handle_signal)
 
-    ui = ConversationUI(verbose=args.verbose)
-
-    # Initialize audio and conversation services
-    vad = VADService(VADConfig(min_silence_duration_ms=200, pre_speech_padding_ms=200))
-    aec = AcousticEchoCanceller()
-    stt = STTService()
-    provider = LLMProvider(LLMProviderConfig())
-    llm = LLMService(provider)
-    tts = TTSService(TTSConfig(voice=args.voice))
-    player = AudioPlayer()
-    player.set_upstream_busy(lambda: getattr(tts, "is_busy", False))
-
-    # Wire echo cancellation reference monitor from playback output
-    player.add_playback_monitor(aec.feed_reference)
-
-    tts.add_listener(player)
-    manager = ConversationManager(stt=stt, llm=llm, tts=tts, on_user_turn=ui.on_user_turn)
-
-    # Wire instant interruption / barge-in controller
-    barge_in = BargeInController(
-        player=player,
-        manager=manager,
-        tts=tts,
-        llm=llm,
-        on_barge_in=ui.on_barge_in,
-    )
-    barge_in.enabled = BARGE_IN_ENABLED
-    vad.add_listener(barge_in)
-
-    # Wire UI listeners to real-time events
-    stt.add_listener(ui)
-    llm.add_listener(ui)
-    player.add_playback_listener(ui)
-
-    # Start backend services
-    vad.start()
-    player.start()
-    tts.start()
-    llm.start()
-    manager.start()
-    stt.start()
-
-    def audio_callback(indata, frames, time_info, status):
-        # When barge-in is disabled, mute microphone while assistant is speaking
-        # to guarantee zero acoustic feedback and prevent the assistant from hearing itself.
-        if not BARGE_IN_ENABLED and player.is_playing:
-            return
-        try:
-            audio = indata.astype(np.float32).flatten()
-            if BARGE_IN_ENABLED and AEC_ENABLED:
-                cleaned = aec.process(audio, 16000)
-            else:
-                cleaned = audio
-
-            # When barge-in is enabled, run VAD to detect speech onset for interruption
-            if BARGE_IN_ENABLED:
-                vad.process(cleaned, 16000)
-
-            # Moonshine STT requires continuous audio (including silence)
-            # to segment utterances and trigger on_line_completed.
-            stt.push(cleaned, 16000)
-        except AudioQueueFull:
-            pass
-        except Exception:
-            logger.exception("Error in CLI audio callback.")
-
+    vad = None
+    stt = None
+    manager = None
+    llm = None
+    tts = None
+    player = None
     stream = None
+    ui = None
+    Live = None
+    README_TARGET_E2E = 2.10
+    README_TARGET_FIRST_TOKEN = 0.45
+    README_TARGET_GATE = 0.40
+    README_TARGET_LLM_FULL = 1.47
+    README_TARGET_TTS_FIRST = 1.82
+
     try:
+        console.log(
+            f"[bold cyan]Starting Waffle Audio CLI[/bold cyan] (verbose={args.verbose}, voice={args.voice or 'default'})"
+        )
+        logger.info("Starting Waffle Audio CLI (verbose=%s, voice=%s)...", args.verbose, args.voice or "default")
+
+        status.update("[bold cyan]Loading core drivers & constants...[/bold cyan]")
+        import numpy as np
+        import sounddevice as sd
+        from rich.live import Live as _Live
+        Live = _Live
+        from constants import AEC_ENABLED, BARGE_IN_ENABLED, OLLAMA_MODEL
+        console.log("[green]✓[/green] Core audio drivers loaded")
+
+        # Initialize audio and conversation services
+        status.update("[bold cyan]Initializing Voice Activity Detection (VAD) & Echo Cancellation...[/bold cyan]")
+        from services.audio_processing.src import (
+            AcousticEchoCanceller,
+            BargeInController,
+            VADConfig,
+            VADService,
+        )
+        vad = VADService(VADConfig(min_silence_duration_ms=200, pre_speech_padding_ms=200))
+        aec = AcousticEchoCanceller()
+        console.log("[green]✓[/green] VAD & Echo Cancellation initialized")
+
+        status.update("[bold cyan]Initializing Speech-to-Text (Moonshine ONNX)...[/bold cyan]")
+        from services.stt.src import AudioQueueFull, STTService
+        stt = STTService()
+        console.log("[green]✓[/green] STT Service initialized")
+
+        status.update(f"[bold cyan]Connecting to LLM ({OLLAMA_MODEL})...[/bold cyan]")
+        from services.llm.src import LLMProvider, LLMProviderConfig, LLMService
+        provider = LLMProvider(LLMProviderConfig())
+        llm = LLMService(provider)
+        console.log(f"[green]✓[/green] LLM Service initialized (model: {OLLAMA_MODEL})")
+
+        status.update("[bold cyan]Loading Text-to-Speech engine...[/bold cyan]")
+        from services.tts.src import TTSConfig, TTSService
+        tts = TTSService(TTSConfig(voice=args.voice))
+        console.log("[green]✓[/green] TTS Service initialized")
+
+        status.update("[bold cyan]Initializing Audio Playback system...[/bold cyan]")
+        from services.audio.src import AudioPlayer
+        player = AudioPlayer()
+        player.set_upstream_busy(lambda: getattr(tts, "is_busy", False))
+        player.add_playback_monitor(aec.feed_reference)
+        tts.add_listener(player)
+        console.log("[green]✓[/green] Audio Player initialized")
+
+        status.update("[bold cyan]Wiring Conversation Pipeline & Barge-In Controller...[/bold cyan]")
+        from services.conversation.src import ConversationManager, ConversationUI
+        from services.conversation.src.ui import (
+            README_TARGET_E2E as _E2E,
+            README_TARGET_FIRST_TOKEN as _FT,
+            README_TARGET_GATE as _GATE,
+            README_TARGET_LLM_FULL as _LF,
+            README_TARGET_TTS_FIRST as _TF,
+        )
+        README_TARGET_E2E = _E2E
+        README_TARGET_FIRST_TOKEN = _FT
+        README_TARGET_GATE = _GATE
+        README_TARGET_LLM_FULL = _LF
+        README_TARGET_TTS_FIRST = _TF
+
+        ui = ConversationUI(verbose=args.verbose)
+        manager = ConversationManager(stt=stt, llm=llm, tts=tts, on_user_turn=ui.on_user_turn)
+        barge_in = BargeInController(
+            player=player,
+            manager=manager,
+            tts=tts,
+            llm=llm,
+            on_barge_in=ui.on_barge_in,
+        )
+        barge_in.enabled = BARGE_IN_ENABLED
+        vad.add_listener(barge_in)
+
+        stt.add_listener(ui)
+        llm.add_listener(ui)
+        player.add_playback_listener(ui)
+        console.log("[green]✓[/green] Real-time event listeners wired")
+
+        # Start backend services
+        status.update("[bold cyan]Starting Voice Activity Detection worker...[/bold cyan]")
+        vad.start()
+        console.log("[green]✓[/green] VAD service started")
+
+        status.update("[bold cyan]Starting Audio Player worker...[/bold cyan]")
+        player.start()
+        console.log("[green]✓[/green] Audio Player started")
+
+        status.update("[bold cyan]Starting TTS engine (loading models & voices)...[/bold cyan]")
+        tts.start()
+        console.log("[green]✓[/green] TTS service started")
+
+        status.update("[bold cyan]Starting LLM worker thread...[/bold cyan]")
+        llm.start()
+        console.log("[green]✓[/green] LLM service started")
+
+        status.update("[bold cyan]Starting Conversation Manager...[/bold cyan]")
+        manager.start()
+        console.log("[green]✓[/green] Conversation Manager started")
+
+        status.update("[bold cyan]Starting STT engine (loading Moonshine model)...[/bold cyan]")
+        stt.start()
+        console.log("[green]✓[/green] STT service started")
+
+        def audio_callback(indata, frames, time_info, status_flag):
+            if not BARGE_IN_ENABLED and player.is_playing:
+                return
+            try:
+                audio = indata.astype(np.float32).flatten()
+                if BARGE_IN_ENABLED and AEC_ENABLED:
+                    cleaned = aec.process(audio, 16000)
+                else:
+                    cleaned = audio
+
+                if BARGE_IN_ENABLED:
+                    vad.process(cleaned, 16000)
+
+                stt.push(cleaned, 16000)
+            except AudioQueueFull:
+                pass
+            except Exception:
+                logger.exception("Error in CLI audio callback.")
+
+        status.update("[bold cyan]Opening microphone input stream (16 kHz)...[/bold cyan]")
         with _suppress_c_stderr():
             stream = sd.InputStream(
                 samplerate=16000,
@@ -190,9 +258,17 @@ def main() -> None:
                 callback=audio_callback,
             )
             stream.start()
+        console.log("[green]✓[/green] Microphone audio stream active")
 
+        status.update("[bold green]All services ready. Launching UI...[/bold green]")
+        time.sleep(0.3)
+    finally:
+        # Take the spinner off and detach console log handler once initialization completes
+        logging.getLogger().removeHandler(startup_log_handler)
+        status.stop()
+
+    try:
         # Run alternate screen live UI with 10 Hz refresh
-        console = Console()
         with Live(ui.render(0, console=console), console=console, screen=True, refresh_per_second=10) as live:
             frame = 0
             while not stop_event.is_set():
@@ -213,12 +289,18 @@ def main() -> None:
             except Exception:
                 pass
 
-        vad.stop()
-        stt.stop()
-        manager.stop()
-        llm.stop()
-        tts.stop()
-        player.stop()
+        if vad is not None:
+            vad.stop()
+        if stt is not None:
+            stt.stop()
+        if manager is not None:
+            manager.stop()
+        if llm is not None:
+            llm.stop()
+        if tts is not None:
+            tts.stop()
+        if player is not None:
+            player.stop()
 
         # Print clean conversation summary after restoring normal terminal
         print("\n" + "=" * 70)
