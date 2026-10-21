@@ -367,6 +367,37 @@ class TestLLMProviderToolCalling(unittest.TestCase):
             self.assertIn("TOOL CALLING POLICY", system_msg)
             mock_tool_manager.get_ollama_tools.assert_called_once()
 
+    def test_generate_fallback_when_model_refuses_without_keyword(self) -> None:
+        """When the model replies with a refusal regarding real-time info, it falls back to search."""
+        mock_tool_manager = MagicMock()
+        provider = LLMProvider(LLMProviderConfig(tools_enabled=True), tool_manager=mock_tool_manager)
+
+        messages = [Message(role="user", content="Who won the game?")]
+        callbacks = DummyCallbacks()
+
+        with patch.object(
+            provider,
+            "_stream_or_collect_tools",
+            return_value=([], "I do not have access to real-time news."),
+        ), patch.object(provider, "_execute_tools_and_stream_reply") as mock_exec:
+            provider.generate(messages, callbacks)
+            mock_exec.assert_called_once()
+            call_args = mock_exec.call_args[1]
+            self.assertEqual(call_args["tool_calls"][0]["function"]["name"], "duckduckgo_search")
+            self.assertEqual(call_args["tool_calls"][0]["function"]["arguments"], {"query": "Who won the game?"})
+
+    def test_prompts_clarity_and_temporal_grounding(self) -> None:
+        """Verify persona includes current date/time and tool prompt provides positive guidance without bloat."""
+        persona = LLMProvider._build_persona_prefix()
+        self.assertIn("Current date and time:", persona)
+
+        tool_prompt = LLMProvider._build_tool_system_prompt()
+        self.assertIn("TOOL CALLING POLICY", tool_prompt)
+        self.assertIn("duckduckgo_search", tool_prompt)
+        # Ensure negative self-defeating language is absent
+        self.assertNotIn("strictly historical and in the past", tool_prompt)
+
+
 
 class TestPhraseManager(unittest.TestCase):
     def setUp(self) -> None:

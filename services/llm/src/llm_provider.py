@@ -5,6 +5,7 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Callable, Sequence
 
 import httpx
@@ -88,9 +89,10 @@ TOOL_RELATED_INTENT_PATTERN = re.compile(
     r"\bcheck\s+(?:the\s+web|online|the\s+internet|recent|latest|news|weather|forecast|time|date|status|who|what|where|when|if|whether)\b|"
     # 4. Explicit tool directives
     r"\b(?:tool[\s_-]*calls?|use\s+(?:a\s+|the\s+)?tool|call\s+(?:a\s+|the\s+)?tool)\b|"
-    # 5. Real-time / dynamic information: weather, news, current time/date
-    r"\b(?:weather|forecast)\b|"
-    r"\b(?:latest|breaking|recent)\s+news\b|"
+    # 5. Real-time / dynamic information: weather, news, headlines, current time/date
+    r"\b(?:weather|forecast|headlines)\b|"
+    r"\b(?:latest|breaking|recent|current|local|today'?s)?\s*news\b|"
+    r"\bwhat(?:'s|\s+is)\s+happening\b|"
     r"\b(?:what\s+time\s+is\s+it|current\s+time|today'?s\s+date|current\s+date|what\s+is\s+today'?s\s+date)\b|"
     # 6. Questions asking for real-time/current facts
     r"\b(?:who\s+is|what\s+is|who\s+are)\b.*\b(?:right\s+now|currently|at\s+present)\b"
@@ -245,7 +247,7 @@ class LLMProvider:
             tool_calls, initial_content = self._stream_or_collect_tools(payload, callbacks)
 
             # Check if text contained inline tool calls if native tool_calls was empty
-            if tool_call_requested and not tool_calls and initial_content:
+            if not tool_calls and initial_content:
                 parsed_calls = self._detect_text_tool_calls(initial_content)
                 if parsed_calls:
                     tool_calls = parsed_calls
@@ -259,8 +261,8 @@ class LLMProvider:
                     callbacks=callbacks,
                 )
             elif not tool_calls and not self._abort_event.is_set():
-                # Only fallback to search if the user explicitly requested a tool call
-                if tool_call_requested and self._should_fallback_to_ddg_search(messages, initial_content):
+                # Fallback to search if the model indicated a lack of real-time info or knowledge cutoff
+                if self._config.tools_enabled and self._should_fallback_to_ddg_search(messages, initial_content):
                     logger.info("Model indicated lack of real-time info; invoking DuckDuckGo fallback search.")
                     last_user_query = messages[-1].content if messages else ""
                     self._execute_tools_and_stream_reply(
@@ -621,11 +623,30 @@ class LLMProvider:
             "don't have real-time",
             "do not have real-time",
             "my knowledge cutoff",
+            "knowledge cutoff",
             "i don't have internet access",
             "i cannot provide current",
+            "cannot provide current",
             "as an ai, i cannot",
+            "tools do not include",
+            "cannot access real-time",
+            "can't access real-time",
+            "do not include real-time",
+            "don't include real-time",
+            "no access to live",
+            "unable to browse",
         ]
         return any(phrase in asst for phrase in refusal_phrases)
+
+    _VOICE_RULES = (
+        "SPEECH RULES (STRICT):\n"
+        "Your final responses are read aloud by a text-to-speech engine (Kokoro/Pocket TTS), so strictly adhere to these speech rules:\n"
+        "1. Reply in 1 to 3 short, spoken sentences only.\n"
+        "2. Output plain spoken English words only. NEVER output markdown formatting (no bold, asterisks, bullet points, headers, or tables), emojis, URLs, or code blocks.\n"
+        "3. NEVER include asterisked or bracketed actions or expressive tags (e.g. do NOT write *laughs*, *smiles*, [sighs], or *chuckles*).\n"
+        "4. Spell out numbers, measurements, and symbols in full words (e.g., 'three kilometers' not '3km', 'percent' not '%').\n"
+        "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes."
+    )
 
     @classmethod
     def _build_persona_prefix(cls) -> str:
@@ -639,19 +660,23 @@ class LLMProvider:
             parts.append(f"The user's current location is {USER_LOCATION}.")
         if USER_TIMEZONE:
             parts.append(f"The user's timezone is {USER_TIMEZONE}.")
+
+        now = datetime.now()
+        if USER_TIMEZONE:
+            try:
+                from zoneinfo import ZoneInfo
+                now = datetime.now(ZoneInfo(USER_TIMEZONE))
+            except Exception:
+                pass
+        parts.append(f"Current date and time: {now.strftime('%A, %B %d, %Y, %I:%M %p')}.")
         return " ".join(parts)
 
     @classmethod
     def _build_default_system_prompt(cls) -> str:
         return (
             f"{cls._build_persona_prefix()}\n\n"
-            "SPEECH RULES (STRICT):\n"
-            "Your final responses are read aloud by a text-to-speech engine (Kokoro/Pocket TTS), so strictly adhere to these speech rules:\n"
-            "1. Reply in 2-3 short, spoken sentences only.\n"
-            "2. Output plain spoken English words only. NEVER output markdown tables, bullet points, headers, emojis, URLs, or code blocks.\n"
-            "3. NEVER include asterisked or bracketed actions or expressive tags (e.g. do NOT write *laughs*, *smiles*, [sighs], or *chuckles*).\n"
-            "4. Spell out numbers, measurements, and symbols in full words (e.g., 'three kilometers' not '3km', 'percent' not '%').\n"
-            "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes."
+            "Be directly helpful, concise, and engaging in your spoken answers.\n\n"
+            f"{cls._VOICE_RULES}"
         )
 
     @classmethod
@@ -659,18 +684,13 @@ class LLMProvider:
         return (
             f"{cls._build_persona_prefix()}\n\n"
             "TOOL CALLING POLICY (MANDATORY):\n"
-            "You have access to tools. Your internal pretraining memory is strictly historical and in the past. You do NOT have access to current real-world facts from memory.\n"
-            "Whenever the user asks a question:\n"
-            "- If an installed tool matches the function (for example, get_current_time for date/time/day/year, or filesystem/database tools), you MUST call that tool.\n"
-            "- If no installed tool matches the function or you need external facts, news, weather, current officeholders, or web details, you MUST call duckduckgo_search.\n"
-            "- NEVER guess or answer real-time facts, dates, time, or current affairs from internal memory. Always call the appropriate tool.\n\n"
-            "SPEECH RULES (STRICT):\n"
-            "Your final responses are read aloud by a text-to-speech engine (Kokoro/Pocket TTS), so strictly adhere to these speech rules:\n"
-            "1. Reply in 2-3 short, spoken sentences only.\n"
-            "2. Output plain spoken English words only. NEVER output markdown tables, bullet points, headers, emojis, URLs, or code blocks.\n"
-            "3. NEVER include asterisked or bracketed actions or expressive tags (e.g. do NOT write *laughs*, *smiles*, [sighs], or *chuckles*).\n"
-            "4. Spell out numbers, measurements, and symbols in full words (e.g., 'three kilometers' not '3km', 'percent' not '%').\n"
-            "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes."
+            "You have access to live tools, including DuckDuckGo search (duckduckgo_search) and MCP tools.\n"
+            "Whenever the user asks for current news, weather, real-time facts, web search, time, dates, or actions handled by tools:\n"
+            "- Proactively invoke the appropriate tool immediately instead of answering from pretraining memory or guessing.\n"
+            "- For web searches, latest news, weather, or current events, invoke duckduckgo_search.\n"
+            "- If an installed MCP tool matches the function, invoke that tool.\n"
+            "- NEVER say you cannot browse the internet, do not have real-time information, or cite a knowledge cutoff date. Always execute the appropriate tool to look up the answer.\n\n"
+            f"{cls._VOICE_RULES}"
         )
 
     @classmethod
@@ -678,58 +698,14 @@ class LLMProvider:
         return (
             f"{cls._build_persona_prefix()}\n\n"
             "You have executed tools and retrieved real-time information to answer the user's inquiry.\n"
-            "Directly and conversationally answer the user's question using the provided tool results.\n\n"
-            "SPEECH RULES (STRICT):\n"
-            "Your final responses are read aloud by a text-to-speech engine (Kokoro/Pocket TTS), so strictly adhere to these speech rules:\n"
-            "1. Reply in 2-3 short, spoken sentences only.\n"
-            "2. Output plain spoken English words only. NEVER output markdown tables, bullet points, headers, emojis, URLs, or code blocks.\n"
-            "3. NEVER include asterisked or bracketed actions or expressive tags (e.g. do NOT write *laughs*, *smiles*, [sighs], or *chuckles*).\n"
-            "4. Spell out numbers, measurements, and symbols in full words (e.g., 'twenty-four degrees Celsius', 'percent' not '%').\n"
-            "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes."
+            "Synthesize the tool results into a clear, direct, and conversational spoken answer to the user's question.\n\n"
+            f"{cls._VOICE_RULES}"
         )
 
-    _DEFAULT_SYSTEM_PROMPT = (
-        "You are a helpful voice assistant named Waffle. You speak in a natural, calm, and friendly conversational tone.\n\n"
-        "SPEECH RULES (STRICT):\n"
-        "Your final responses are read aloud by a text-to-speech engine (Kokoro/Pocket TTS), so strictly adhere to these speech rules:\n"
-        "1. Reply in 2-3 short, spoken sentences only.\n"
-        "2. Output plain spoken English words only. NEVER output markdown tables, bullet points, headers, emojis, URLs, or code blocks.\n"
-        "3. NEVER include asterisked or bracketed actions or expressive tags (e.g. do NOT write *laughs*, *smiles*, [sighs], or *chuckles*).\n"
-        "4. Spell out numbers, measurements, and symbols in full words (e.g., 'three kilometers' not '3km', 'percent' not '%').\n"
-        "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes."
-    )
-
-    _TOOL_SYSTEM_PROMPT = (
-        "You are a helpful voice assistant named Waffle. You speak in a natural, calm, and friendly conversational tone.\n\n"
-        "TOOL CALLING POLICY (MANDATORY):\n"
-        "You have access to tools. Your internal pretraining memory is strictly historical and in the past. You do NOT have access to current real-world facts from memory.\n"
-        "Whenever the user asks a question:\n"
-        "- If an installed tool matches the function (for example, get_current_time for date/time/day/year, or filesystem/database tools), you MUST call that tool.\n"
-        "- If no installed tool matches the function or you need external facts, news, weather, current officeholders, or web details, you MUST call duckduckgo_search.\n"
-        "- NEVER guess or answer real-time facts, dates, time, or current affairs from internal memory. Always call the appropriate tool.\n\n"
-        "SPEECH RULES (STRICT):\n"
-        "Your final responses are read aloud by a text-to-speech engine (Kokoro/Pocket TTS), so strictly adhere to these speech rules:\n"
-        "1. Reply in 2-3 short, spoken sentences only.\n"
-        "2. Output plain spoken English words only. NEVER output markdown tables, bullet points, headers, emojis, URLs, or code blocks.\n"
-        "3. NEVER include asterisked or bracketed actions or expressive tags (e.g. do NOT write *laughs*, *smiles*, [sighs], or *chuckles*).\n"
-        "4. Spell out numbers, measurements, and symbols in full words (e.g., 'three kilometers' not '3km', 'percent' not '%').\n"
-        "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes."
-    )
-
-    _SYSTEM_PROMPT = _DEFAULT_SYSTEM_PROMPT
-
-    _FOLLOWUP_SYSTEM_PROMPT = (
-        "You are a helpful voice assistant named Waffle. You speak in a natural, calm, and friendly conversational tone.\n\n"
-        "You have executed tools and retrieved real-time information to answer the user's inquiry.\n"
-        "Directly and conversationally answer the user's question using the provided tool results.\n\n"
-        "SPEECH RULES (STRICT):\n"
-        "Your final responses are read aloud by a text-to-speech engine (Kokoro/Pocket TTS), so strictly adhere to these speech rules:\n"
-        "1. Reply in 2-3 short, spoken sentences only.\n"
-        "2. Output plain spoken English words only. NEVER output markdown tables, bullet points, headers, emojis, URLs, or code blocks.\n"
-        "3. NEVER include asterisked or bracketed actions or expressive tags (e.g. do NOT write *laughs*, *smiles*, [sighs], or *chuckles*).\n"
-        "4. Spell out numbers, measurements, and symbols in full words (e.g., 'twenty-four degrees Celsius', 'percent' not '%').\n"
-        "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes."
-    )
+    _SYSTEM_PROMPT = _VOICE_RULES
+    _DEFAULT_SYSTEM_PROMPT = _SYSTEM_PROMPT
+    _TOOL_SYSTEM_PROMPT = _SYSTEM_PROMPT
+    _FOLLOWUP_SYSTEM_PROMPT = _SYSTEM_PROMPT
 
     def _build_request(
         self,
