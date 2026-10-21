@@ -9,12 +9,16 @@ from typing import Any, Callable, Sequence
 import httpx
 
 from constants import (
+    ASSISTANT_NAME,
     OLLAMA_BASE_URL,
     OLLAMA_KEEP_ALIVE,
     OLLAMA_MODEL,
     OLLAMA_NUM_CTX,
     OLLAMA_NUM_PREDICT,
     TOOLS_ENABLED,
+    USER_LOCATION,
+    USER_NAME,
+    USER_TIMEZONE,
 )
 from models import Message
 from services.tools import PhraseManager, ToolManager
@@ -218,7 +222,11 @@ class LLMProvider:
             if (self._config.tools_enabled and tool_call_requested)
             else []
         )
-        sys_prompt = self._TOOL_SYSTEM_PROMPT if tool_call_requested else self._DEFAULT_SYSTEM_PROMPT
+        sys_prompt = (
+            self._build_tool_system_prompt()
+            if tool_call_requested
+            else self._build_default_system_prompt()
+        )
         payload = self._build_request(messages, tools=tools, system_prompt=sys_prompt)
 
         try:
@@ -389,9 +397,10 @@ class LLMProvider:
             for m in sliding_messages
         ]
 
+        followup_sys_prompt = self._build_followup_system_prompt()
         # Use native Ollama tool execution schema: assistant tool_calls + role: tool results
         followup_messages = [
-            {"role": "system", "content": self._FOLLOWUP_SYSTEM_PROMPT},
+            {"role": "system", "content": followup_sys_prompt},
             *conversation_context,
             {
                 "role": "assistant",
@@ -431,7 +440,7 @@ class LLMProvider:
             tool_context = "\n\n".join(tool_context_lines)
 
             fallback_messages = [
-                {"role": "system", "content": self._FOLLOWUP_SYSTEM_PROMPT},
+                {"role": "system", "content": followup_sys_prompt},
                 *conversation_context,
                 {
                     "role": "user",
@@ -558,6 +567,67 @@ class LLMProvider:
         ]
         return any(phrase in asst for phrase in refusal_phrases)
 
+    @classmethod
+    def _build_persona_prefix(cls) -> str:
+        name = ASSISTANT_NAME or "Waffle"
+        parts = [
+            f"You are a helpful voice assistant named {name}. You speak in a natural, calm, and friendly conversational tone."
+        ]
+        if USER_NAME:
+            parts.append(f"You are speaking with {USER_NAME}.")
+        if USER_LOCATION:
+            parts.append(f"The user's current location is {USER_LOCATION}.")
+        if USER_TIMEZONE:
+            parts.append(f"The user's timezone is {USER_TIMEZONE}.")
+        return " ".join(parts)
+
+    @classmethod
+    def _build_default_system_prompt(cls) -> str:
+        return (
+            f"{cls._build_persona_prefix()}\n\n"
+            "SPEECH RULES (STRICT):\n"
+            "Your final responses are read aloud by a text-to-speech engine (Kokoro/Pocket TTS), so strictly adhere to these speech rules:\n"
+            "1. Reply in 2-3 short, spoken sentences only.\n"
+            "2. Output plain spoken English words only. NEVER output markdown tables, bullet points, headers, emojis, URLs, or code blocks.\n"
+            "3. NEVER include asterisked or bracketed actions or expressive tags (e.g. do NOT write *laughs*, *smiles*, [sighs], or *chuckles*).\n"
+            "4. Spell out numbers, measurements, and symbols in full words (e.g., 'three kilometers' not '3km', 'percent' not '%').\n"
+            "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes."
+        )
+
+    @classmethod
+    def _build_tool_system_prompt(cls) -> str:
+        return (
+            f"{cls._build_persona_prefix()}\n\n"
+            "TOOL CALLING POLICY (MANDATORY):\n"
+            "You have access to tools. Your internal pretraining memory is strictly historical and in the past. You do NOT have access to current real-world facts from memory.\n"
+            "Whenever the user asks a question:\n"
+            "- If an installed tool matches the function (for example, get_current_time for date/time/day/year, or filesystem/database tools), you MUST call that tool.\n"
+            "- If no installed tool matches the function or you need external facts, news, weather, current officeholders, or web details, you MUST call duckduckgo_search.\n"
+            "- NEVER guess or answer real-time facts, dates, time, or current affairs from internal memory. Always call the appropriate tool.\n\n"
+            "SPEECH RULES (STRICT):\n"
+            "Your final responses are read aloud by a text-to-speech engine (Kokoro/Pocket TTS), so strictly adhere to these speech rules:\n"
+            "1. Reply in 2-3 short, spoken sentences only.\n"
+            "2. Output plain spoken English words only. NEVER output markdown tables, bullet points, headers, emojis, URLs, or code blocks.\n"
+            "3. NEVER include asterisked or bracketed actions or expressive tags (e.g. do NOT write *laughs*, *smiles*, [sighs], or *chuckles*).\n"
+            "4. Spell out numbers, measurements, and symbols in full words (e.g., 'three kilometers' not '3km', 'percent' not '%').\n"
+            "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes."
+        )
+
+    @classmethod
+    def _build_followup_system_prompt(cls) -> str:
+        return (
+            f"{cls._build_persona_prefix()}\n\n"
+            "You have executed tools and retrieved real-time information to answer the user's inquiry.\n"
+            "Directly and conversationally answer the user's question using the provided tool results.\n\n"
+            "SPEECH RULES (STRICT):\n"
+            "Your final responses are read aloud by a text-to-speech engine (Kokoro/Pocket TTS), so strictly adhere to these speech rules:\n"
+            "1. Reply in 2-3 short, spoken sentences only.\n"
+            "2. Output plain spoken English words only. NEVER output markdown tables, bullet points, headers, emojis, URLs, or code blocks.\n"
+            "3. NEVER include asterisked or bracketed actions or expressive tags (e.g. do NOT write *laughs*, *smiles*, [sighs], or *chuckles*).\n"
+            "4. Spell out numbers, measurements, and symbols in full words (e.g., 'twenty-four degrees Celsius', 'percent' not '%').\n"
+            "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes."
+        )
+
     _DEFAULT_SYSTEM_PROMPT = (
         "You are a helpful voice assistant named Waffle. You speak in a natural, calm, and friendly conversational tone.\n\n"
         "SPEECH RULES (STRICT):\n"
@@ -610,7 +680,7 @@ class LLMProvider:
         """Build an Ollama chat request with sliding window guard and optional tools."""
         sliding_messages = messages[-16:] if len(messages) > 16 else messages
 
-        system_message = {"role": "system", "content": system_prompt or self._DEFAULT_SYSTEM_PROMPT}
+        system_message = {"role": "system", "content": system_prompt or self._build_default_system_prompt()}
 
         request_payload: dict[str, Any] = {
             "model": self._config.model,

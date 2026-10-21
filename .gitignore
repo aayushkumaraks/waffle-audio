@@ -7,3 +7,6 @@ logs/
 cloned_voices/*.safetensors
 cloned_voices/*.wav
 voices/
+.env
+.env.*
+!.env.example

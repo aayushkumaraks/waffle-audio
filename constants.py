@@ -9,6 +9,39 @@ import os
 from pathlib import Path
 
 
+def _load_env_file(filepath: Path | str = ".env") -> None:
+    """Load key-value pairs from a .env file into os.environ if present.
+
+    Preserves any variables already explicitly set in the process environment.
+    """
+    env_path = Path(filepath)
+    if not env_path.is_file():
+        return
+    try:
+        with env_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    key, _, value = line.partition("=")
+                    key = key.strip()
+                    value = value.strip()
+                    if len(value) >= 2 and (
+                        (value[0] == '"' and value[-1] == '"')
+                        or (value[0] == "'" and value[-1] == "'")
+                    ):
+                        value = value[1:-1]
+                    if key not in os.environ:
+                        os.environ[key] = value
+    except Exception:
+        pass
+
+
+# Load .env before defining any constants
+_load_env_file(".env")
+
+
 def _int_from_env(name: str, default: int) -> int:
     value = os.getenv(name)
     if value is None:
@@ -20,10 +53,41 @@ def _int_from_env(name: str, default: int) -> int:
         raise ValueError(f"Environment variable {name} must be an integer.") from exc
 
 # ---------------------------------------------------------------------------
+# Personalization & User Identity (Loaded from .env or empty defaults)
+# ---------------------------------------------------------------------------
+
+USER_NAME: str = os.getenv("USER_NAME", "").strip()
+USER_LOCATION: str = os.getenv("USER_LOCATION", "").strip()
+USER_TIMEZONE: str = os.getenv("USER_TIMEZONE", "").strip()
+ASSISTANT_NAME: str = os.getenv("ASSISTANT_NAME", "Waffle").strip() or "Waffle"
+
+# ---------------------------------------------------------------------------
+# Audio Hardware Configuration
+# ---------------------------------------------------------------------------
+
+AUDIO_INPUT_DEVICE: int | str | None = os.getenv("AUDIO_INPUT_DEVICE", "").strip() or None
+if isinstance(AUDIO_INPUT_DEVICE, str) and AUDIO_INPUT_DEVICE.lower() in {"default", "none", ""}:
+    AUDIO_INPUT_DEVICE = None
+elif isinstance(AUDIO_INPUT_DEVICE, str) and AUDIO_INPUT_DEVICE.isdigit():
+    AUDIO_INPUT_DEVICE = int(AUDIO_INPUT_DEVICE)
+
+AUDIO_OUTPUT_DEVICE: int | str | None = os.getenv("AUDIO_OUTPUT_DEVICE", "").strip() or None
+if isinstance(AUDIO_OUTPUT_DEVICE, str) and AUDIO_OUTPUT_DEVICE.lower() in {"default", "none", ""}:
+    AUDIO_OUTPUT_DEVICE = None
+elif isinstance(AUDIO_OUTPUT_DEVICE, str) and AUDIO_OUTPUT_DEVICE.isdigit():
+    AUDIO_OUTPUT_DEVICE = int(AUDIO_OUTPUT_DEVICE)
+
+# ---------------------------------------------------------------------------
+# External Tokens & Keys
+# ---------------------------------------------------------------------------
+
+GITHUB_PERSONAL_ACCESS_TOKEN: str = os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN", "").strip()
+
+# ---------------------------------------------------------------------------
 # Ollama / LLM
 # ---------------------------------------------------------------------------
 
-OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://172.19.96.1:11434") # WSL to HOST
+OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen3.5:4b")
 # Keep the model resident in memory so turns never pay a cold-load penalty.
 OLLAMA_KEEP_ALIVE: str = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
@@ -112,6 +176,7 @@ KOKORO_DEFAULT_VOICE: str = "af_sarah"
 KOKORO_DEFAULT_LANGUAGE: str = "en-us"
 POCKET_TTS_DEFAULT_VOICE: str = "anna"
 POCKET_TTS_DEFAULT_LANGUAGE: str = "english"
+VOICECHAT_TTS_VOICE: str = os.getenv("VOICECHAT_TTS_VOICE", "").strip() or POCKET_TTS_DEFAULT_VOICE
 POCKET_TTS_CACHE_DIR: str = os.getenv(
     "VOICECHAT_POCKET_TTS_CACHE_DIR", "voiceModels/pocket-tts-cache"
 )

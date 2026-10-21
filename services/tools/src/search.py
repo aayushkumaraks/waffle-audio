@@ -77,8 +77,16 @@ class DuckDuckGoSearch:
             re.I,
         )
         if date_time_pattern.search(query):
+            import zoneinfo
             from datetime import datetime
-            now = datetime.now().astimezone()
+            from constants import USER_TIMEZONE
+            tz = None
+            if USER_TIMEZONE:
+                try:
+                    tz = zoneinfo.ZoneInfo(USER_TIMEZONE)
+                except Exception:
+                    pass
+            now = datetime.now(tz=tz).astimezone(tz=tz) if tz else datetime.now().astimezone()
             date_str = now.strftime("%A, %B %d, %Y")
             time_str = now.strftime("%I:%M %p %Z").strip()
             return f"Current authoritative date and time: Today is {date_str}, and the current local time is {time_str}."
@@ -90,6 +98,12 @@ class DuckDuckGoSearch:
         results: list[dict[str, Any]] = []
         is_news = is_news_query(query)
         cleaned = clean_conversational_query(query)
+
+        # Inject user location into generic weather or local queries if not already present
+        from constants import USER_LOCATION
+        if USER_LOCATION and re.search(r"^\b(weather|forecast|current weather|news|headlines)\b", cleaned, re.I):
+            if USER_LOCATION.lower() not in cleaned.lower():
+                cleaned = f"{cleaned} in {USER_LOCATION}"
 
         last_error: Exception | None = None
         try:

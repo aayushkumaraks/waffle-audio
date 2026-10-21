@@ -228,12 +228,17 @@ class TestContextCompactor(unittest.TestCase):
             Message(role="assistant", content="Assistant reply 2"),
         ]
 
-        # Pre-set abort
-        slow_compactor.abort()
-        launched = slow_compactor.compact_async(history, on_compacted)
-        self.assertTrue(launched)
+        # Simulate slow summary execution and trigger abort while in-flight
+        def slow_summary(messages):
+            time.sleep(0.05)
+            return "simulated summary"
 
-        # Ensure callback was never invoked because it was aborted
+        with patch.object(slow_compactor, "_summarize_messages", side_effect=slow_summary):
+            launched = slow_compactor.compact_async(history, on_compacted)
+            self.assertTrue(launched)
+            # Abort while in-flight
+            slow_compactor.abort()
+
         time.sleep(0.1)
         self.assertFalse(callback_invoked)
 

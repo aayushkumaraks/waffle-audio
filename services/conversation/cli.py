@@ -133,7 +133,12 @@ def main() -> None:
         import sounddevice as sd
         from rich.live import Live as _Live
         Live = _Live
-        from constants import AEC_ENABLED, BARGE_IN_ENABLED, OLLAMA_MODEL
+        from constants import (
+            AEC_ENABLED,
+            AUDIO_INPUT_DEVICE,
+            BARGE_IN_ENABLED,
+            OLLAMA_MODEL,
+        )
         console.log("[green]✓[/green] Core audio drivers loaded")
 
         # Initialize audio and conversation services
@@ -260,6 +265,7 @@ def main() -> None:
                 dtype="float32",
                 blocksize=512,
                 callback=audio_callback,
+                device=AUDIO_INPUT_DEVICE,
             )
             stream.start()
         console.log("[green]✓[/green] Microphone audio stream active")

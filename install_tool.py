@@ -18,7 +18,7 @@ from rich.prompt import Confirm, Prompt
 from rich.table import Table
 from rich.text import Text
 
-from constants import MCP_CONFIG_PATH
+from constants import GITHUB_PERSONAL_ACCESS_TOKEN, MCP_CONFIG_PATH
 from services.tools import DuckDuckGoSearch, ToolManager
 
 console = Console()
@@ -65,7 +65,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         "description": "Allows inspecting repositories, issues, and pull requests via GitHub token.",
         "command": "npx",
         "args": ["-y", "@modelcontextprotocol/server-github"],
-        "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": ""},
+        "env": {"GITHUB_PERSONAL_ACCESS_TOKEN": GITHUB_PERSONAL_ACCESS_TOKEN},
     },
     "puppeteer": {
         "title": "Headless Browser Automation (Puppeteer)",

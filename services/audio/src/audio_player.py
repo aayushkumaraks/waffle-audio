@@ -9,6 +9,7 @@ from typing import Callable, TypeAlias
 import numpy as np
 import sounddevice as sd
 
+from constants import AUDIO_OUTPUT_DEVICE
 from services.tts.src.tts_types import (
     AudioBuffer,
     TTSListener,
@@ -225,6 +226,7 @@ class AudioPlayer(TTSListener):
                             channels=2,
                             dtype="float32",
                             blocksize=512,
+                            device=AUDIO_OUTPUT_DEVICE,
                         )
                         stream.start()
                         stream_rate = sample_rate

@@ -60,9 +60,29 @@ echo -e "${CYAN}[3/4]${RESET} Synchronizing Python virtual environment dependenc
 uv sync
 echo -e "${GREEN}✓ Dependencies synchronized.${RESET}"
 
-# 4. Check Ollama service & model using constants.py
+# Check if .env file exists or if --setup was explicitly requested
+SETUP_REQUESTED=false
+CLEANED_ARGS=()
+for arg in "$@"; do
+    if [[ "$arg" == "--setup" ]]; then
+        SETUP_REQUESTED=true
+    else
+        CLEANED_ARGS+=("$arg")
+    fi
+done
+
+if [ ! -f .env ] || [ "$SETUP_REQUESTED" = true ]; then
+    echo -e "\n${CYAN}[Setup]${RESET} Launching interactive configuration setup..."
+    if [ "$SETUP_REQUESTED" = true ]; then
+        uv run python setup.py --force
+    else
+        uv run python setup.py
+    fi
+fi
+
+# 4. Check Ollama service & model using constants.py / .env
 echo -e "${CYAN}[4/4]${RESET} Checking Ollama service and model..."
-OLLAMA_BASE_URL=$(uv run --no-sync python -c "import constants; print(constants.OLLAMA_BASE_URL)" 2>/dev/null || echo "http://172.19.96.1:11434")
+OLLAMA_BASE_URL=$(uv run --no-sync python -c "import constants; print(constants.OLLAMA_BASE_URL)" 2>/dev/null || echo "http://localhost:11434")
 MODEL_NAME=$(uv run --no-sync python -c "import constants; print(getattr(constants, 'OLLAMA_MODEL', 'qwen3.5:4b'))" 2>/dev/null || echo "qwen3.5:4b")
 OLLAMA_BASE_URL="${OLLAMA_BASE_URL%/}"
 
@@ -149,4 +169,4 @@ fi
 
 # Launch the CLI application
 echo -e "\n${BOLD}${GREEN}Starting Waffle Audio CLI...${RESET}\n"
-exec uv run python -u -m services.conversation.cli "$@" "${VOICE_ARG[@]}"
+exec uv run python -u -m services.conversation.cli "${CLEANED_ARGS[@]}" "${VOICE_ARG[@]}"
