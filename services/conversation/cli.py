@@ -79,6 +79,12 @@ def main() -> None:
         default=os.getenv("VOICECHAT_TTS_VOICE"),
         help="Voice to use for TTS (predefined name, cloned voice name from cloned_voices/, or path to .safetensors)",
     )
+    parser.add_argument(
+        "--trigger-mode",
+        action="store_true",
+        default=os.getenv("VOICECHAT_TRIGGER_MODE", "false").lower() in ("true", "1", "yes"),
+        help="Only process and respond when the trigger word 'Hey ASSISTANT_NAME' is spoken",
+    )
     args, _ = parser.parse_known_args()
 
     _setup_logging()
@@ -133,7 +139,14 @@ def main() -> None:
         import sounddevice as sd
         from rich.live import Live as _Live
         Live = _Live
-        from constants import AEC_ENABLED, BARGE_IN_ENABLED, OLLAMA_MODEL
+        from constants import (
+            AEC_ENABLED,
+            ASSISTANT_NAME,
+            AUDIO_INPUT_DEVICE,
+            BARGE_IN_ENABLED,
+            OLLAMA_MODEL,
+            TRIGGER_MODE,
+        )
         console.log("[green]✓[/green] Core audio drivers loaded")
 
         # Initialize audio and conversation services
@@ -153,11 +166,13 @@ def main() -> None:
         stt = STTService()
         console.log("[green]✓[/green] STT Service initialized")
 
-        status.update(f"[bold cyan]Connecting to LLM ({OLLAMA_MODEL})...[/bold cyan]")
+        status.update(f"[bold cyan]Connecting to LLM ({OLLAMA_MODEL}) & loading MCP tools...[/bold cyan]")
         from services.llm.src import LLMProvider, LLMProviderConfig, LLMService
         provider = LLMProvider(LLMProviderConfig())
         llm = LLMService(provider)
-        console.log(f"[green]✓[/green] LLM Service initialized (model: {OLLAMA_MODEL})")
+        tool_count = len(provider.tool_manager.get_ollama_tools())
+        console.log(f"[green]✓[/green] LLM Service initialized (model: {OLLAMA_MODEL}, tools available: {tool_count})")
+
 
         status.update("[bold cyan]Loading Text-to-Speech engine...[/bold cyan]")
         from services.tts.src import TTSConfig, TTSService
@@ -170,7 +185,9 @@ def main() -> None:
         player.set_upstream_busy(lambda: getattr(tts, "is_busy", False))
         player.add_playback_monitor(aec.feed_reference)
         tts.add_listener(player)
-        console.log("[green]✓[/green] Audio Player initialized")
+        provider.set_tts(tts)
+        console.log("[green]✓[/green] Audio Player & Filler Phrases initialized")
+
 
         status.update("[bold cyan]Wiring Conversation Pipeline & Barge-In Controller...[/bold cyan]")
         from services.conversation.src import ConversationManager, ConversationUI
@@ -187,8 +204,27 @@ def main() -> None:
         README_TARGET_LLM_FULL = _LF
         README_TARGET_TTS_FIRST = _TF
 
-        ui = ConversationUI(verbose=args.verbose)
-        manager = ConversationManager(stt=stt, llm=llm, tts=tts, on_user_turn=ui.on_user_turn)
+        is_trigger_mode = bool(args.trigger_mode or TRIGGER_MODE)
+        if is_trigger_mode:
+            console.log(
+                f"[yellow]Trigger mode ACTIVE[/yellow]: Assistant will only respond when 'Hey {ASSISTANT_NAME}' is spoken"
+            )
+            logger.info("Trigger mode active (trigger word: 'Hey %s')", ASSISTANT_NAME)
+
+        ui = ConversationUI(
+            verbose=args.verbose,
+            trigger_mode=is_trigger_mode,
+            assistant_name=ASSISTANT_NAME,
+        )
+        manager = ConversationManager(
+            stt=stt,
+            llm=llm,
+            tts=tts,
+            on_user_turn=ui.on_user_turn,
+            trigger_mode=is_trigger_mode,
+            assistant_name=ASSISTANT_NAME,
+            on_user_turn_ignored=ui.on_user_turn_ignored,
+        )
         barge_in = BargeInController(
             player=player,
             manager=manager,
@@ -256,6 +292,7 @@ def main() -> None:
                 dtype="float32",
                 blocksize=512,
                 callback=audio_callback,
+                device=AUDIO_INPUT_DEVICE,
             )
             stream.start()
         console.log("[green]✓[/green] Microphone audio stream active")

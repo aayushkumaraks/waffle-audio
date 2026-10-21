@@ -130,3 +130,4 @@ The UI layer is separated from transport and voice orchestration. The API client
 - Live-session polling failures are tolerated because the media connection is independent of the UI polling loop.
 - Microphone tracks and WebRTC peers are explicitly stopped on disconnect and component unmount.
 - The API URL is stored locally in the browser and can be changed without rebuilding the app.
+- Personalization (`USER_NAME`, `USER_LOCATION`, `USER_TIMEZONE`, `ASSISTANT_NAME`) and server-side Model Context Protocol (MCP) tool execution are automatically inherited by all webapp turns through the centralized backend conversation pipeline.

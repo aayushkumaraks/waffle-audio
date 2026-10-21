@@ -28,6 +28,16 @@ class LLMListener(ABC):
     def on_generation_completed(self, text: str) -> None:
         ...
 
+    def on_tool_started(
+        self, tool_name: str, arguments: dict, phrase: str | None = None
+    ) -> None:
+        pass
+
+    def on_tool_completed(self, tool_name: str, result: str) -> None:
+        pass
+
+
+
 
 class LLMServiceError(Exception):
     """Base exception for all LLM service errors."""
@@ -149,6 +159,33 @@ class LLMService(LLMCallbacks):
 
         for listener in tuple(self._listeners):
             listener.on_generation_completed(text)
+
+    def on_tool_started(
+        self, tool_name: str, arguments: dict, phrase: str | None = None
+    ) -> None:
+        """Dispatch tool started."""
+        for listener in tuple(self._listeners):
+            try:
+                try:
+                    listener.on_tool_started(tool_name, arguments, phrase)
+                except TypeError:
+                    listener.on_tool_started(tool_name, arguments)
+            except Exception:
+                logger.debug("Error in listener on_tool_started", exc_info=True)
+
+    def on_tool_completed(self, tool_name: str, result: str) -> None:
+        """Dispatch tool completed."""
+        for listener in tuple(self._listeners):
+            try:
+                listener.on_tool_completed(tool_name, result)
+            except Exception:
+                logger.debug("Error in listener on_tool_completed", exc_info=True)
+
+    @property
+    def phrase_manager(self):
+        return getattr(self._provider, "phrase_manager", None)
+
+
 
     def _process_generation_queue(self):
         while True:

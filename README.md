@@ -89,9 +89,16 @@ When speech is detected during assistant playback or generation, the **BargeInCo
 - **Instant Interruption (Barge-In)**: Speak at any time to interrupt Waffle mid-sentence. The VAD and AEC detect your voice, stopping speaker playback in <50ms, aborting LLM generation, and clearing TTS queues.
 - **Acoustic Echo Cancellation (AEC)**: Normalized Least Mean Squares (NLMS) filter cancels speaker output from the microphone feed so Waffle never interrupts itself or loops back speech.
 - **Adaptive Clause Chunking**: `ClauseChunker` splits streaming LLM tokens on punctuation (`,`, `;`, `:`) and conjunctions (`and`, `but`, `because`), with a first-chunk fast path (3 words) for sub-200ms TTFB.
+- **Interactive Setup Wizard & Onboarding**: Automatically detects and prompts for configuration on first run (`setup.py`), saving to a git-ignored `.env` file with seamless fallback to non-sensitive defaults in `constants.py`.
+- **User Personalization & Dynamic Prompting**: Speaks with you by name (`USER_NAME`), localizes responses to your city (`USER_LOCATION`), and anchors date/time queries to your timezone (`USER_TIMEZONE`).
+- **Asynchronous Background Context Compactor**: Background worker (`ConversationCompactor`) periodically rolls older conversation history into concise summaries when turn count reaches threshold (`COMPACTOR_THRESHOLD = 6`), keeping inference fast without stalling active speech.
+- **Dynamic Intent-Gated Tool Calling**: Ommits heavy tool schemas from prompt context during normal conversation; dynamically injects Model Context Protocol (MCP) tool schemas only when natural search/fetch intents ("search", "find recent", "check the web", "weather", etc.) are detected.
+- **Model Context Protocol (MCP) Tool Calling**: Native integration with external MCP servers (stdio and SSE) exposing standard tools for databases, filesystem, web fetching, and more.
+- **DuckDuckGo Search Fallback**: If the user asks for something and no installed tool matches that function, or when real-time facts/news/weather are needed, Waffle automatically queries DuckDuckGo search to get the details.
+- **Tool Installer & Manager (`install_tool.py`)**: One-click installer with curated presets (fetch, sqlite, time, filesystem, memory, github) and interactive management of MCP tools.
 - **Unified In-Process Async Pipeline**: Consolidates audio, VAD, STT, LLM, TTS, and player into a single async loop with zero serialization overhead, alongside POSIX shared memory (`SharedAudioBuffer`) for multi-process deployments.
-- **Sliding Conversation Context**: Retains a rolling 6–8 turns (max 16 messages) to maintain immediate context while preventing inference degradation over long sessions.
 - **Speech-Targeted LLM Formatting**: System prompt enforces natural conversational speech with strictly no markdown, emojis, asterisks, or numbered lists.
+
 
 ## Quick Start (One-Click)
 
@@ -106,10 +113,22 @@ On Windows:
 run.bat
 ```
 
+> [!NOTE]
+> On your very first run, `./run.sh` automatically launches the interactive **Setup Wizard** (`setup.py`) to personalize your assistant and detect your microphone and Ollama setup. You can re-run the wizard anytime with `./run.sh --setup` or `uv run python setup.py --force`.
+
 Or run directly with `uv`:
 ```bash
 uv run python -m services.conversation.cli
 ```
+
+### Setup Wizard & Personalization
+
+When `.env` is absent, the onboarding wizard prompts you to configure:
+1. **User Personalization** (no defaults required): Your name, your city/location (e.g. `New Delhi`, `San Francisco`), and your local timezone (e.g. `Asia/Kolkata`, `America/New_York`).
+2. **Assistant & Audio Hardware** (with smart defaults): Assistant name (`Waffle`), voice (`anna` / cloned voices), and microphone device index.
+3. **LLM Runtime & Tokens** (with defaults): Reachable Ollama base URL (auto-detected host IP on WSL2 or `http://localhost:11434`), model (`qwen3.5:4b`), and optional GitHub personal access token for tools.
+
+Configuration is saved directly to `.env` (which is safely ignored by git). See [`.env.example`](.env.example) for manual setup.
 
 ### CLI Interface Features
 
@@ -117,6 +136,7 @@ uv run python -m services.conversation.cli
 - **Real-Time Conversation**: Live transcription appears as you speak, and assistant responses stream word-by-word synchronously as the audio plays.
 - **Dynamic Auto-Scrolling**: The conversation window automatically scrolls down so newest utterances and live responses are always visible, indicating hidden lines with a border subtitle.
 - **Multi-Line Speech Accumulation**: Continuous speech across multiple Moonshine segments is seamlessly accumulated into a single turn without fragmentation.
+- **Trigger Mode (`--trigger-mode`)**: When enabled (e.g. `./run.sh --trigger-mode`), Waffle only processes and responds when the wake phrase `"Hey <ASSISTANT_NAME>"` is spoken (e.g. `"Hey Waffle, what's the weather?"`), ignoring background speech.
 - **ASCII Animations & Loaders**: Animated audio waveforms in the header and visual spinners/loaders during speech synthesis and model inference.
 - **No Log Spam**: All backend and driver logs are cleanly redirected to `logs/voicechat.log`, keeping the terminal UI pristine.
 - **Verbose Latency Profiling**: Pass `--verbose` (e.g. `./run.sh --verbose`) to show a real-time pipeline latency timeline in the UI and compare against README benchmarks.
@@ -136,43 +156,116 @@ Record 10-15 seconds from your mic or supply an audio file (`.wav`, `.mp3`). `./
 ./run.sh --voice my_voice
 ```
 
-### Tuning
+### Tools & MCP (Model Context Protocol) Integration
+
+Waffle Audio integrates with the **Model Context Protocol (MCP)**, allowing your assistant to invoke tools whenever you ask questions or need real-time data:
+
+- **Dynamic Intent Gating**: Tool schemas are omitted during standard chit-chat to keep LLM context light and latency fast. When you speak a tool-related keyword or phrase ("search the web for...", "look up recent news in...", "check the weather", "what is today's date?"), tool instructions and schemas are injected dynamically.
+- **Installed MCP Tools**: If an installed MCP tool matches the requested function (e.g. SQLite database, filesystem, web fetcher, time), Waffle calls that tool directly.
+- **DuckDuckGo Search Fallback**: If no installed tool matches the requested function, or when general web search / real-time facts are needed, Waffle automatically searches DuckDuckGo and reads the answer aloud.
+
+#### Installing Tools to the App
+
+Use the included tool installer script (`install_tool.py` or `./install_tool.sh`):
+
+```bash
+# Launch the interactive tool installer
+uv run python install_tool.py
+
+# Or install from curated presets directly:
+uv run python install_tool.py --preset fetch       # Web page reader & markdown extractor
+uv run python install_tool.py --preset sqlite      # Query SQLite database tables
+uv run python install_tool.py --preset time        # Accurate time & timezone conversions
+uv run python install_tool.py --preset filesystem  # Local file inspection
+uv run python install_tool.py --preset memory      # Persistent knowledge graph memory
+uv run python install_tool.py --preset github      # Inspect GitHub repos, issues, and PRs
+
+# List installed tools & fallback status
+uv run python install_tool.py --list
+
+# Test DuckDuckGo search fallback
+uv run python install_tool.py --test-search "current space discoveries"
+```
+
+All installed tools are saved in `mcp_servers.json` in standard MCP format and automatically discovered on startup.
+
+#### Spoken Bridge Phrases (On-The-Go TTS)
+
+While a tool call or DuckDuckGo search runs in the background, Waffle immediately speaks conversational bridge phrases with natural inflection (e.g. *"Looking that up for you..."*, *"Searching for it on the web..."*):
+- **Synthesized On The Go**: Generated directly through the active TTS pipeline (Pocket TTS or Kokoro) using the exact same configured voice or cloned voice model, ensuring audio consistency without any pre-saved clips.
+- **Context-Aware Selection**: Categorizes actions into `search`, `database`, `filesystem`, `time`, `fetch`, and `general` to pick the most accurate phrase for the invoked tool.
+- **De-duplication & Randomization**: Remembers recently used phrases to cycle through similar alternatives without repeating itself.
+- **Preview Phrases**:
+  ```bash
+  uv run python install_tool.py --preview-phrases # View phrases and categories
+  ```
+
+### Tuning & Configuration Reference
+
+All options can be configured in `.env` (created automatically by `setup.py`) or passed as environment variables. If `.env` is absent, `constants.py` supplies non-sensitive fallback defaults.
 
 | Environment variable | Default | Purpose |
 |---|---|---|
-| `OLLAMA_KEEP_ALIVE` | `30m` | How long Ollama keeps the model in memory |
+| `USER_NAME` | `""` | User's preferred name for assistant personalization |
+| `USER_LOCATION` | `""` | User's city/location (appended to general weather/news queries) |
+| `USER_TIMEZONE` | `""` | User's timezone identifier (e.g. `America/New_York`, `Asia/Kolkata`) |
+| `ASSISTANT_NAME` | `Waffle` | Voice assistant persona name |
+| `AUDIO_INPUT_DEVICE` | `default` | Audio input device index or name (from PortAudio/sounddevice) |
+| `AUDIO_OUTPUT_DEVICE` | `default` | Audio output playback device index or name |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama API endpoint (auto-detected host IP in WSL2) |
+| `OLLAMA_MODEL` | `qwen3.5:4b` | Ollama model name |
+| `OLLAMA_KEEP_ALIVE` | `30m` | How long Ollama keeps the model loaded in GPU VRAM |
 | `OLLAMA_NUM_PREDICT` | `160` | Maximum tokens per reply |
 | `VOICECHAT_TTS_BACKEND` | `pocket` | `pocket` or `kokoro` |
+| `VOICECHAT_TTS_VOICE` | `anna` | Default TTS voice or cloned voice name |
 | `VOICECHAT_GAP_TIMEOUT` | `0.8` | Seconds of silence before finalizing user turn |
 | `VOICECHAT_QUICK_FIRE_TIMEOUT` | `0.3` | Silence timeout when sentence ends with terminal punctuation |
 | `VOICECHAT_AEC_ENABLED` | `true` | Enable acoustic echo cancellation for microphone loopback |
 | `VOICECHAT_BARGE_IN_ENABLED` | `true` | Enable instant interruption on detected user speech |
+| `VOICECHAT_TRIGGER_MODE` | `false` | When true, only responds when 'Hey ASSISTANT_NAME' is spoken |
+| `VOICECHAT_TOOL_CALLING_ENABLED` | `true` | Enable MCP and DuckDuckGo tool execution |
+| `VOICECHAT_COMPACTOR_ENABLED` | `true` | Run background context compactor for long conversations |
+| `VOICECHAT_COMPACTOR_THRESHOLD` | `6` | Number of turns before triggering background compaction |
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | `""` | GitHub personal access token for GitHub MCP server preset |
 
 ## Project structure
 
 ```
+.env.example          Template environment file
+setup.py              Interactive onboarding and environment setup wizard
+install_tool.py       CLI installer and manager for MCP server tools
+install_tool.sh       Bash runner for install_tool.py
+mcp_servers.json      Model Context Protocol server configuration
+constants.py          Environment loader and non-sensitive fallback defaults
 services/
-  conversation/   Orchestrates STT -> LLM -> TTS
+  conversation/       Orchestrates STT -> LLM -> TTS
     src/
       manager.py          ConversationManager & sliding history window
+      compactor.py        Async background context compactor for small LLMs
       sentence_gate.py    Adaptive silence-gap gate & ClauseChunker
       ui.py               Rich terminal UI controller & renderer
     cli.py                Live microphone voice assistant with AEC & Barge-In
+  tools/              MCP tool integration & web search engine
+    src/
+      manager.py          ToolManager (orchestrates MCP tools & search fallback)
+      mcp_client.py       Client for Model Context Protocol servers
+      search.py           DuckDuckGo web, news, and weather search fallback
+      phrases.py          Spoken bridge phrases during tool calls
   audio_processing/
     src/
       vad_service.py      Silero VAD with speech callbacks & pre-roll ring buffer
       echo_cancellation.py NLMS Acoustic Echo Canceller with delay reference
       barge_in.py         BargeInController (stops playback, aborts LLM, purges TTS)
       resampler.py        Fast polyphase / soxr SIMD audio resampling
-  stt/            Moonshine streaming transcription wrapper
-  llm/            Ollama HTTP provider + streaming abort support
-  tts/            Feature-flagged Kokoro and Pocket TTS services with queue purge
-  audio/          Blocking audio playback worker with instant interrupt
-  pipeline.py     Unified in-process async pipeline
-  shared_memory.py Zero-copy POSIX shared memory audio ring buffer
-models/           Shared data models (Message)
-voiceModels/      Kokoro ONNX model files (not committed)
-pyproject.toml    Dependencies managed by uv
+  stt/                Moonshine streaming transcription wrapper
+  llm/                Ollama HTTP provider + streaming abort & intent-gated tools
+  tts/                Feature-flagged Kokoro and Pocket TTS services with queue purge
+  audio/              Blocking audio playback worker with instant interrupt
+  pipeline.py         Unified in-process async pipeline
+  shared_memory.py    Zero-copy POSIX shared memory audio ring buffer
+models/               Shared data models (Message)
+voiceModels/          Kokoro ONNX model files (not committed)
+pyproject.toml        Dependencies managed by uv
 ```
 
 ## Quick start
