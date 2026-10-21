@@ -71,6 +71,15 @@ class TestDuckDuckGoSearch(unittest.TestCase):
         cleaned_tool = clean_conversational_query("Tool call, check the latest news in New Delhi")
         self.assertEqual(cleaned_tool, "latest news in New Delhi")
 
+        cleaned_web = clean_conversational_query("Check the web for latest news in New Delhi")
+        self.assertEqual(cleaned_web, "latest news in New Delhi")
+
+        cleaned_search = clean_conversational_query("Search the web for Python 3.13")
+        self.assertEqual(cleaned_search, "Python 3.13")
+
+        cleaned_find = clean_conversational_query("Find recent news about space")
+        self.assertEqual(cleaned_find, "news about space")
+
     @patch("services.tools.src.search.DDGS")
     def test_news_query_routes_to_ddgs_news(self, mock_ddgs_class: MagicMock) -> None:
         mock_instance = MagicMock()
@@ -261,10 +270,41 @@ class TestLLMProviderToolCalling(unittest.TestCase):
         self.assertFalse(provider._should_fallback_to_ddg_search(messages, asst_normal))
 
     def test_has_tool_call_keyword(self) -> None:
+        # Explicit tool directives
         self.assertTrue(has_tool_call_keyword("Tool call, what's the weather in London?"))
         self.assertTrue(has_tool_call_keyword("Can you do a tool-call to check time?"))
         self.assertTrue(has_tool_call_keyword("tool_call: check stock"))
-        self.assertFalse(has_tool_call_keyword("What is the weather today?"))
+        self.assertTrue(has_tool_call_keyword("use the tool to get time"))
+
+        # Search phrases
+        self.assertTrue(has_tool_call_keyword("search for latest news in New Delhi"))
+        self.assertTrue(has_tool_call_keyword("search the web for python 3.13"))
+        self.assertTrue(has_tool_call_keyword("can you search duckduckgo for restaurants"))
+        self.assertTrue(has_tool_call_keyword("look up who won the award"))
+
+        # Find recent phrases
+        self.assertTrue(has_tool_call_keyword("find recent articles on artificial intelligence"))
+        self.assertTrue(has_tool_call_keyword("find latest news about Mars"))
+
+        # Check the web / real-time facts
+        self.assertTrue(has_tool_call_keyword("check the web for open cafes"))
+        self.assertTrue(has_tool_call_keyword("check online for ticket prices"))
+        self.assertTrue(has_tool_call_keyword("check recent headlines"))
+        self.assertTrue(has_tool_call_keyword("what is the weather in Seattle?"))
+        self.assertTrue(has_tool_call_keyword("what time is it right now?"))
+        self.assertTrue(has_tool_call_keyword("tell me today's date"))
+        self.assertTrue(has_tool_call_keyword("Who is the Prime Minister of United Kingdom right now?"))
+
+        # Installed tool names
+        self.assertTrue(has_tool_call_keyword("can you run a sqlite query?", tool_names={"sqlite_query"}))
+        self.assertTrue(has_tool_call_keyword("get current time please", tool_names={"get_current_time"}))
+
+        # Standard conversational queries must NOT trigger tools (keeping context light)
+        self.assertFalse(has_tool_call_keyword("Tell me a funny joke"))
+        self.assertFalse(has_tool_call_keyword("How are you doing today?"))
+        self.assertFalse(has_tool_call_keyword("Write a short poem about the ocean"))
+        self.assertFalse(has_tool_call_keyword("Can you explain how transformers work?"))
+        self.assertFalse(has_tool_call_keyword("What is the capital of France?"))
         self.assertFalse(has_tool_call_keyword("I need some tools for carpentry"))
         self.assertFalse(has_tool_call_keyword(""))
         self.assertFalse(has_tool_call_keyword(None))

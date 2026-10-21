@@ -28,6 +28,12 @@ def clean_conversational_query(query: str) -> str:
         flags=re.I,
     )
     q = re.sub(
+        r"^(check\s+(the\s+)?(web|internet|online)\s+(for\s+)?|search\s+(the\s+)?(web|internet|online)\s+(for\s+)?|find\s+(recent|latest)\s+(for\s+)?|look\s*up\s+(for\s+)?)",
+        "",
+        q,
+        flags=re.I,
+    )
+    q = re.sub(
         r"^(who\s+is\s+(the\s+)?|what\s+is\s+(the\s+)?|where\s+is\s+(the\s+)?|when\s+was\s+(the\s+)?|tell\s+me\s+(about\s+)?|can\s+you\s+(check\s+|tell\s+me\s+)?|check\s+(the\s+)?|search\s+(for\s+)?)",
         "",
         q,
@@ -39,7 +45,8 @@ def clean_conversational_query(query: str) -> str:
         q,
         flags=re.I,
     )
-    q = re.sub(r"[?!.,;:]", "", q)
+    q = re.sub(r"[?!,;:]", "", q)
+    q = re.sub(r"(?<!\d)\.|\.(?!\d)", "", q)
     return re.sub(r"\s+", " ", q).strip()
 
 

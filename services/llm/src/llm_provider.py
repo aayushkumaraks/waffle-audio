@@ -62,11 +62,53 @@ class LLMProviderError(Exception):
     """Raised when the LLM provider encounters an error."""
 
 
-def has_tool_call_keyword(text: str | None) -> bool:
-    """Check if the user specifically requested a tool call via the 'tool call' keyword."""
+TOOL_RELATED_INTENT_PATTERN = re.compile(
+    r"("
+    # 1. Search keywords: search, look up, browse the web, google, duckduckgo
+    r"\b(?:search|look\s*up|browse(?:\s+the\s+web)?|google|duckduckgo)\b|"
+    # 2. Find recent / latest / online / on the web / out
+    r"\bfind\s+(?:recent|latest|new|current|online|on\s+the\s+web|out)\b|"
+    # 3. Check the web / online / recent / latest / news / weather / time / date
+    r"\bcheck\s+(?:the\s+web|online|the\s+internet|recent|latest|news|weather|forecast|time|date|status|who|what|where|when|if|whether)\b|"
+    # 4. Explicit tool directives
+    r"\b(?:tool[\s_-]*calls?|use\s+(?:a\s+|the\s+)?tool|call\s+(?:a\s+|the\s+)?tool)\b|"
+    # 5. Real-time / dynamic information: weather, news, current time/date
+    r"\b(?:weather|forecast)\b|"
+    r"\b(?:latest|breaking|recent)\s+news\b|"
+    r"\b(?:what\s+time\s+is\s+it|current\s+time|today'?s\s+date|current\s+date|what\s+is\s+today'?s\s+date)\b|"
+    # 6. Questions asking for real-time/current facts
+    r"\b(?:who\s+is|what\s+is|who\s+are)\b.*\b(?:right\s+now|currently|at\s+present)\b"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def has_tool_intent(
+    text: str | None,
+    tool_names: set[str] | Sequence[str] | None = None,
+) -> bool:
+    """Check if the user request is related to a tool (e.g. search, find recent, check the web, weather, etc.)."""
     if not text:
         return False
-    return bool(re.search(r"\btool[\s_-]*calls?\b", text, re.IGNORECASE))
+
+    if TOOL_RELATED_INTENT_PATTERN.search(text):
+        return True
+
+    # Check against any installed MCP tool names or space-separated tool names
+    if tool_names:
+        lowered = text.lower()
+        for name in tool_names:
+            if name.lower() in lowered:
+                return True
+            space_name = name.replace("_", " ").lower()
+            if space_name in lowered:
+                return True
+
+    return False
+
+
+# Backward-compatible alias
+has_tool_call_keyword = has_tool_intent
 
 
 class LLMProvider:
@@ -163,7 +205,10 @@ class LLMProvider:
 
         last_user_msg = next((m for m in reversed(messages) if m.role == "user"), None)
         tool_call_requested = (
-            has_tool_call_keyword(last_user_msg.content)
+            has_tool_call_keyword(
+                last_user_msg.content,
+                tool_names=self._tool_manager.installed_tool_names,
+            )
             if last_user_msg
             else False
         )
