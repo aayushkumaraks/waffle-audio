@@ -73,6 +73,10 @@ class LLMProviderConfig:
     base_url: str = OLLAMA_BASE_URL
     model: str = OLLAMA_MODEL
     tools_enabled: bool = TOOLS_ENABLED
+    assistant_name: str | None = None
+    user_name: str | None = None
+    user_location: str | None = None
+    user_timezone: str | None = None
 
 
 class LLMProviderError(Exception):
@@ -237,9 +241,9 @@ class LLMProvider:
             else []
         )
         sys_prompt = (
-            self._build_tool_system_prompt()
+            self._build_tool_system_prompt(**self._get_persona_kwargs())
             if tool_call_requested
-            else self._build_default_system_prompt()
+            else self._build_default_system_prompt(**self._get_persona_kwargs())
         )
         payload = self._build_request(messages, tools=tools, system_prompt=sys_prompt)
 
@@ -442,7 +446,7 @@ class LLMProvider:
             for m in sliding_messages
         ]
 
-        followup_sys_prompt = self._build_followup_system_prompt()
+        followup_sys_prompt = self._build_followup_system_prompt(**self._get_persona_kwargs())
         followup_messages = [
             {"role": "system", "content": followup_sys_prompt},
             *conversation_context,
@@ -638,6 +642,14 @@ class LLMProvider:
         ]
         return any(phrase in asst for phrase in refusal_phrases)
 
+    def _get_persona_kwargs(self) -> dict[str, str | None]:
+        return {
+            "assistant_name": self._config.assistant_name if self._config.assistant_name is not None else ASSISTANT_NAME,
+            "user_name": self._config.user_name if self._config.user_name is not None else USER_NAME,
+            "user_location": self._config.user_location if self._config.user_location is not None else USER_LOCATION,
+            "user_timezone": self._config.user_timezone if self._config.user_timezone is not None else USER_TIMEZONE,
+        }
+
     _VOICE_RULES = (
         "SPEECH RULES (STRICT):\n"
         "Your final responses are read aloud by a text-to-speech engine (Kokoro/Pocket TTS), so strictly adhere to these speech rules:\n"
@@ -645,44 +657,91 @@ class LLMProvider:
         "2. Output plain spoken English words only. NEVER output markdown formatting (no bold, asterisks, bullet points, headers, or tables), emojis, URLs, or code blocks.\n"
         "3. NEVER include asterisked or bracketed actions or expressive tags (e.g. do NOT write *laughs*, *smiles*, [sighs], or *chuckles*).\n"
         "4. Spell out numbers, measurements, and symbols in full words (e.g., 'three kilometers' not '3km', 'percent' not '%').\n"
-        "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes."
+        "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes.\n"
+        "6. Never address the user by any name unless their name is explicitly provided in the persona instructions above."
     )
 
     @classmethod
-    def _build_persona_prefix(cls) -> str:
-        name = ASSISTANT_NAME or "Waffle"
-        parts = [
-            f"You are a helpful voice assistant named {name}. You speak in a natural, calm, and friendly conversational tone."
-        ]
-        if USER_NAME:
-            parts.append(f"You are speaking with {USER_NAME}.")
-        if USER_LOCATION:
-            parts.append(f"The user's current location is {USER_LOCATION}.")
-        if USER_TIMEZONE:
-            parts.append(f"The user's timezone is {USER_TIMEZONE}.")
+    def _build_persona_prefix(
+        cls,
+        assistant_name: str | None = None,
+        user_name: str | None = None,
+        user_location: str | None = None,
+        user_timezone: str | None = None,
+    ) -> str:
+        asst_name = assistant_name if assistant_name is not None else ASSISTANT_NAME
+        u_name = user_name if user_name is not None else USER_NAME
+        u_loc = user_location if user_location is not None else USER_LOCATION
+        u_tz = user_timezone if user_timezone is not None else USER_TIMEZONE
+
+        parts = []
+        if asst_name and asst_name.strip():
+            parts.append(
+                f"You are a helpful voice assistant named {asst_name.strip()}. You speak in a natural, calm, and friendly conversational tone."
+            )
+        else:
+            parts.append(
+                "You are a helpful voice assistant. You speak in a natural, calm, and friendly conversational tone."
+            )
+
+        if u_name and u_name.strip():
+            parts.append(f"You are speaking with {u_name.strip()}.")
+        else:
+            parts.append(
+                "The user's name is not provided. Never assume, invent, or use any name to address or refer to the user."
+            )
+
+        if u_loc and u_loc.strip():
+            parts.append(f"The user's current location is {u_loc.strip()}.")
+        if u_tz and u_tz.strip():
+            parts.append(f"The user's timezone is {u_tz.strip()}.")
 
         now = datetime.now()
-        if USER_TIMEZONE:
+        if u_tz and u_tz.strip():
             try:
                 from zoneinfo import ZoneInfo
-                now = datetime.now(ZoneInfo(USER_TIMEZONE))
+                now = datetime.now(ZoneInfo(u_tz.strip()))
             except Exception:
                 pass
         parts.append(f"Current date and time: {now.strftime('%A, %B %d, %Y, %I:%M %p')}.")
         return " ".join(parts)
 
     @classmethod
-    def _build_default_system_prompt(cls) -> str:
+    def _build_default_system_prompt(
+        cls,
+        assistant_name: str | None = None,
+        user_name: str | None = None,
+        user_location: str | None = None,
+        user_timezone: str | None = None,
+    ) -> str:
+        prefix = cls._build_persona_prefix(
+            assistant_name=assistant_name,
+            user_name=user_name,
+            user_location=user_location,
+            user_timezone=user_timezone,
+        )
         return (
-            f"{cls._build_persona_prefix()}\n\n"
+            f"{prefix}\n\n"
             "Be directly helpful, concise, and engaging in your spoken answers.\n\n"
             f"{cls._VOICE_RULES}"
         )
 
     @classmethod
-    def _build_tool_system_prompt(cls) -> str:
+    def _build_tool_system_prompt(
+        cls,
+        assistant_name: str | None = None,
+        user_name: str | None = None,
+        user_location: str | None = None,
+        user_timezone: str | None = None,
+    ) -> str:
+        prefix = cls._build_persona_prefix(
+            assistant_name=assistant_name,
+            user_name=user_name,
+            user_location=user_location,
+            user_timezone=user_timezone,
+        )
         return (
-            f"{cls._build_persona_prefix()}\n\n"
+            f"{prefix}\n\n"
             "TOOL CALLING POLICY (MANDATORY):\n"
             "You have access to live tools, including DuckDuckGo search (duckduckgo_search) and MCP tools.\n"
             "Whenever the user asks for current news, weather, real-time facts, web search, time, dates, or actions handled by tools:\n"
@@ -694,9 +753,21 @@ class LLMProvider:
         )
 
     @classmethod
-    def _build_followup_system_prompt(cls) -> str:
+    def _build_followup_system_prompt(
+        cls,
+        assistant_name: str | None = None,
+        user_name: str | None = None,
+        user_location: str | None = None,
+        user_timezone: str | None = None,
+    ) -> str:
+        prefix = cls._build_persona_prefix(
+            assistant_name=assistant_name,
+            user_name=user_name,
+            user_location=user_location,
+            user_timezone=user_timezone,
+        )
         return (
-            f"{cls._build_persona_prefix()}\n\n"
+            f"{prefix}\n\n"
             "You have executed tools and retrieved real-time information to answer the user's inquiry.\n"
             "Synthesize the tool results into a clear, direct, and conversational spoken answer to the user's question.\n\n"
             f"{cls._VOICE_RULES}"
@@ -716,7 +787,10 @@ class LLMProvider:
         """Build an Ollama chat request with sliding window guard and optional tools."""
         sliding_messages = messages[-16:] if len(messages) > 16 else messages
 
-        system_message = {"role": "system", "content": system_prompt or self._build_default_system_prompt()}
+        system_message = {
+            "role": "system",
+            "content": system_prompt or self._build_default_system_prompt(**self._get_persona_kwargs()),
+        }
 
         request_payload: dict[str, Any] = {
             "model": self._config.model,

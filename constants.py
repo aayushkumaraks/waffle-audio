@@ -16,7 +16,11 @@ def _load_env_file(filepath: Path | str = ".env") -> None:
     """
     env_path = Path(filepath)
     if not env_path.is_file():
-        return
+        fallback_path = Path(__file__).resolve().parent / filepath
+        if fallback_path.is_file():
+            env_path = fallback_path
+        else:
+            return
     try:
         with env_path.open("r", encoding="utf-8") as f:
             for line in f:
@@ -59,7 +63,7 @@ def _int_from_env(name: str, default: int) -> int:
 USER_NAME: str = os.getenv("USER_NAME", "").strip()
 USER_LOCATION: str = os.getenv("USER_LOCATION", "").strip()
 USER_TIMEZONE: str = os.getenv("USER_TIMEZONE", "").strip()
-ASSISTANT_NAME: str = os.getenv("ASSISTANT_NAME", "Waffle").strip() or "Waffle"
+ASSISTANT_NAME: str = os.getenv("ASSISTANT_NAME", "Waffle").strip()
 TRIGGER_MODE: bool = os.getenv("VOICECHAT_TRIGGER_MODE", "false").lower() in ("true", "1", "yes")
 
 # ---------------------------------------------------------------------------
