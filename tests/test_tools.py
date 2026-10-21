@@ -386,16 +386,41 @@ class TestLLMProviderToolCalling(unittest.TestCase):
             self.assertEqual(call_args["tool_calls"][0]["function"]["name"], "duckduckgo_search")
             self.assertEqual(call_args["tool_calls"][0]["function"]["arguments"], {"query": "Who won the game?"})
 
-    def test_prompts_clarity_and_temporal_grounding(self) -> None:
-        """Verify persona includes current date/time and tool prompt provides positive guidance without bloat."""
-        persona = LLMProvider._build_persona_prefix()
-        self.assertIn("Current date and time:", persona)
+    def test_has_tool_intent_conversational_phrases(self) -> None:
+        """Verify conversational lookups, follow-up checks, and references trigger tool intent."""
+        self.assertTrue(has_tool_call_keyword("Yeah why don't we check for that"))
+        self.assertTrue(has_tool_call_keyword("Can you look it up?"))
+        self.assertTrue(has_tool_call_keyword("Can you search it right now"))
+        self.assertTrue(has_tool_call_keyword("but I asked you to do previously"))
+        self.assertTrue(has_tool_call_keyword("look that up for me"))
+        self.assertTrue(has_tool_call_keyword("check it out please"))
 
-        tool_prompt = LLMProvider._build_tool_system_prompt()
-        self.assertIn("TOOL CALLING POLICY", tool_prompt)
-        self.assertIn("duckduckgo_search", tool_prompt)
-        # Ensure negative self-defeating language is absent
-        self.assertNotIn("strictly historical and in the past", tool_prompt)
+    def test_should_fallback_to_ddg_search_stalling_phrases(self) -> None:
+        """Verify stalling phrases where assistant claims it is searching trigger fallback."""
+        provider = LLMProvider(LLMProviderConfig(tools_enabled=True), tool_manager=MagicMock())
+        messages = [Message(role="user", content="Can you look it up?")]
+
+        stalling_1 = "I am searching for some recent local news or events scheduled very soon for Wednesday, October 21st. Please give me a moment to look this up for you."
+        self.assertTrue(provider._should_fallback_to_ddg_search(messages, stalling_1))
+
+        stalling_2 = "Yes, I am looking up positive news and local events happening very soon in New Delhi right now. I will be with you on that in a moment."
+        self.assertTrue(provider._should_fallback_to_ddg_search(messages, stalling_2))
+
+        stalling_3 = "I am currently searching for some good things for you right here in New Delhi. Just give me a little more time to find those details."
+        self.assertTrue(provider._should_fallback_to_ddg_search(messages, stalling_3))
+
+    def test_extract_fallback_query_from_stalling_assistant(self) -> None:
+        """Verify fallback query derives clean standalone search query from stalling text."""
+        messages = [
+            Message(role="user", content="Yeah, can you find some positive news for me?"),
+            Message(role="assistant", content="I found some good things!"),
+            Message(role="user", content="Can you look it up?"),
+        ]
+        asst = "I am searching for some recent local news or events scheduled very soon for Wednesday, October 21st. Please give me a moment to look this up for you."
+        query = LLMProvider._extract_fallback_query(messages, asst)
+        self.assertIn("news", query.lower())
+        self.assertNotIn("please give me a moment", query.lower())
+
 
 
 

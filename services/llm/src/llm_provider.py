@@ -85,20 +85,25 @@ class LLMProviderError(Exception):
 
 TOOL_RELATED_INTENT_PATTERN = re.compile(
     r"("
-    # 1. Search keywords: search, look up, browse the web, google, duckduckgo
-    r"\b(?:search|look\s*up|browse(?:\s+the\s+web)?|google|duckduckgo)\b|"
-    # 2. Find recent / latest / online / on the web / out
-    r"\bfind\s+(?:recent|latest|new|current|online|on\s+the\s+web|out)\b|"
-    # 3. Check the web / online / recent / latest / news / weather / time / date
-    r"\bcheck\s+(?:the\s+web|online|the\s+internet|recent|latest|news|weather|forecast|time|date|status|who|what|where|when|if|whether)\b|"
+    # 1. Search keywords: search, look up, look it up, browse the web, google, duckduckgo
+    r"\b(?:search|browse(?:\s+the\s+web)?|google|duckduckgo)\b|"
+    r"\blook\s*(?:(?:it|this|that|things?|details?|events?|news)\s+)?up\b|"
+    # 2. Find recent / latest / online / on the web / out / some / more
+    r"\bfind\s+(?:recent|latest|new|current|online|on\s+the\s+web|out|some|more)\b|"
+    # 3. Check keywords: check the web, check for that, check that out, check it, can you check
+    r"\bcheck\s+(?:for\s+)?(?:that|it|this|out|into|the\s+web|online|the\s+internet|recent|latest|news|weather|forecast|time|date|status|who|what|where|when|if|whether)\b|"
+    r"\bcheck\s+(?:it|that|this)\s*out\b|"
+    r"\b(?:can\s+you\s+|could\s+you\s+|let'?s\s+|why\s+don'?t\s+we\s+)?check\b|"
     # 4. Explicit tool directives
     r"\b(?:tool[\s_-]*calls?|use\s+(?:a\s+|the\s+)?tool|call\s+(?:a\s+|the\s+)?tool)\b|"
-    # 5. Real-time / dynamic information: weather, news, headlines, current time/date
+    # 5. References to previous requests
+    r"\b(?:as\s+i\s+asked|i\s+asked\s+you|asked\s+you\s+to\s+do|previously\s+asked|do\s+that|do\s+it)\b|"
+    # 6. Real-time / dynamic information: weather, news, headlines, current time/date
     r"\b(?:weather|forecast|headlines)\b|"
     r"\b(?:latest|breaking|recent|current|local|today'?s)?\s*news\b|"
     r"\bwhat(?:'s|\s+is)\s+happening\b|"
     r"\b(?:what\s+time\s+is\s+it|current\s+time|today'?s\s+date|current\s+date|what\s+is\s+today'?s\s+date)\b|"
-    # 6. Questions asking for real-time/current facts
+    # 7. Questions asking for real-time/current facts
     r"\b(?:who\s+is|what\s+is|who\s+are)\b.*\b(?:right\s+now|currently|at\s+present)\b"
     r")",
     re.IGNORECASE,
@@ -226,14 +231,34 @@ class LLMProvider:
         self._abort_event.clear()
 
         last_user_msg = next((m for m in reversed(messages) if m.role == "user"), None)
-        tool_call_requested = (
-            has_tool_call_keyword(
+        tool_call_requested = False
+        if last_user_msg:
+            tool_call_requested = has_tool_call_keyword(
                 last_user_msg.content,
                 tool_names=self._tool_manager.installed_tool_names,
             )
-            if last_user_msg
-            else False
-        )
+            # If not detected by keywords alone, check if this is a follow-up to a recent search/lookup context
+            if not tool_call_requested and len(messages) >= 2:
+                prev_asst_msg = next((m for m in reversed(messages[:-1]) if m.role == "assistant"), None)
+                if prev_asst_msg and prev_asst_msg.content:
+                    asst_lower = prev_asst_msg.content.lower()
+                    search_context_prompts = (
+                        "search", "searching", "look up", "looking up", "look this up", "look that up",
+                        "check", "checking", "find something", "happening closer to today", "uplifting instead",
+                        "give me a moment", "let me see", "shall i find", "would you like to hear"
+                    )
+                    user_lower = last_user_msg.content.lower().strip().rstrip(".!?")
+                    followup_affirmations = (
+                        "yes", "yeah", "sure", "ok", "okay", "please", "why not", "why don't we",
+                        "go ahead", "do it", "and", "and...", "what about", "how about", "tell me",
+                        "can you", "could you", "do that", "anything else", "more", "look it up",
+                        "check for that"
+                    )
+                    if any(p in asst_lower for p in search_context_prompts) and (
+                        any(user_lower.startswith(f) or user_lower == f for f in followup_affirmations)
+                        or len(user_lower.split()) <= 4
+                    ):
+                        tool_call_requested = True
 
         tools = (
             self._tool_manager.get_ollama_tools()
@@ -265,17 +290,26 @@ class LLMProvider:
                     callbacks=callbacks,
                 )
             elif not tool_calls and not self._abort_event.is_set():
-                # Fallback to search if the model indicated a lack of real-time info or knowledge cutoff
+                # Fallback to search if the model indicated a lack of real-time info or stalled claiming it is searching
                 if self._config.tools_enabled and self._should_fallback_to_ddg_search(messages, initial_content):
-                    logger.info("Model indicated lack of real-time info; invoking DuckDuckGo fallback search.")
-                    last_user_query = messages[-1].content if messages else ""
+                    logger.info("Model indicated lack of real-time info or stalled; invoking DuckDuckGo fallback search.")
+                    fallback_query = self._extract_fallback_query(messages, initial_content)
+                    logger.info("Extracted fallback search query: '%s'", fallback_query)
+
+                    # If premature text was already streamed to TTS before stalling was detected, interrupt it
+                    if hasattr(self._phrase_manager, "_tts") and hasattr(self._phrase_manager._tts, "interrupt"):
+                        try:
+                            self._phrase_manager._tts.interrupt()
+                        except Exception:
+                            pass
+
                     self._execute_tools_and_stream_reply(
                         messages=messages,
                         tool_calls=[
                             {
                                 "function": {
                                     "name": "duckduckgo_search",
-                                    "arguments": {"query": last_user_query},
+                                    "arguments": {"query": fallback_query},
                                 }
                             }
                         ],
@@ -614,12 +648,13 @@ class LLMProvider:
     def _should_fallback_to_ddg_search(
         self, messages: Sequence[Message], assistant_text: str
     ) -> bool:
-        """Detect if the assistant replied that it lacks information when asked a question."""
+        """Detect if the assistant replied that it lacks information or stalled claiming it is searching."""
         if not messages or not assistant_text:
             return False
 
         asst = assistant_text.lower()
-        refusal_phrases = [
+        refusal_and_stalling_phrases = [
+            # 1. Knowledge cutoff and internet access refusals
             "don't have access to real-time",
             "do not have access to real-time",
             "cannot browse the internet",
@@ -639,8 +674,78 @@ class LLMProvider:
             "don't include real-time",
             "no access to live",
             "unable to browse",
+            # 2. Stalling phrases where assistant claims it is searching in text without calling a tool
+            "give me a moment to look",
+            "give me a moment to search",
+            "give me a moment to find",
+            "give me a moment",
+            "give me a little more time to find",
+            "give me a little more time",
+            "give me a second to",
+            "i will be with you on that in a moment",
+            "i am searching for",
+            "i am currently searching",
+            "i'm currently searching",
+            "i'm searching for",
+            "i will search for",
+            "i am looking up",
+            "i'm looking up",
+            "looking that up online right now",
+            "looking that up right now",
+            "checking the latest updates in",
+            "checking the latest updates right now",
+            "what would you like to look up",
+            "what would you like me to search",
         ]
-        return any(phrase in asst for phrase in refusal_phrases)
+        return any(phrase in asst for phrase in refusal_and_stalling_phrases)
+
+    @classmethod
+    def _extract_fallback_query(
+        cls, messages: Sequence[Message], assistant_text: str
+    ) -> str:
+        """Derive an effective, standalone search query from assistant stalling text or conversation context."""
+        asst = assistant_text.strip()
+        loc = USER_LOCATION or "New Delhi"
+
+        # 1. Check if the assistant text described what it was 'searching for'
+        match = re.search(
+            r"(?:searching for|looking up|checking (?:the )?latest updates (?:in|on)|search for)\s+([^.!?]+)",
+            asst,
+            re.IGNORECASE,
+        )
+        if match:
+            candidate = match.group(1).strip()
+            candidate = re.sub(
+                r"\b(?:some|very soon|right now|please give me a moment|scheduled very soon|details)\b",
+                "",
+                candidate,
+                flags=re.IGNORECASE,
+            ).strip()
+            if len(candidate) > 5:
+                is_local = any(k in candidate.lower() for k in ["news", "weather", "events", "traffic", "local", "city"])
+                if is_local and loc and loc.lower().split(",")[0] not in candidate.lower():
+                    candidate = f"{candidate} {loc}"
+                return re.sub(r"\s+", " ", candidate).strip()
+
+        # 2. Check conversation history backwards for a topical user query
+        for msg in reversed(messages):
+            if msg.role == "user" and msg.content:
+                text = msg.content.strip()
+                text_lower = text.lower()
+                if text_lower in {"and", "and...", "what about", "can you look it up?", "can you search it right now", "but i asked you to do previously", "yeah why don't we check for that"}:
+                    continue
+                if len(text.split()) >= 3 and not re.match(r"^(?:can you|please|look it up|search it|check for that|and\b)", text, re.I):
+                    is_local = any(k in text_lower for k in ["news", "weather", "events", "traffic", "local", "city", "happenings"])
+                    if is_local and loc and loc.lower().split(",")[0] not in text.lower():
+                        return f"{text} {loc}"
+                    return text
+
+        # 3. Default back to last user message or general positive news
+        last_user = messages[-1].content.strip() if messages else ""
+        if len(last_user) > 10 and not any(v in last_user.lower() for v in ["look it up", "search it", "previously", "and..."]):
+            return last_user
+
+        return f"latest positive news events {loc}".strip() if loc else "latest positive news events"
 
     def _get_persona_kwargs(self) -> dict[str, str | None]:
         return {
@@ -745,9 +850,11 @@ class LLMProvider:
             "TOOL CALLING POLICY (MANDATORY):\n"
             "You have access to live tools, including DuckDuckGo search (duckduckgo_search) and MCP tools.\n"
             "Whenever the user asks for current news, weather, real-time facts, web search, time, dates, or actions handled by tools:\n"
-            "- Proactively invoke the appropriate tool immediately instead of answering from pretraining memory or guessing.\n"
+            "- Proactively invoke the appropriate tool IMMEDIATELY in this turn instead of answering from pretraining memory or guessing.\n"
             "- For web searches, latest news, weather, or current events, invoke duckduckgo_search.\n"
             "- If an installed MCP tool matches the function, invoke that tool.\n"
+            "- NEVER emit conversational text saying you are searching, looking up, checking updates, or asking for time (e.g. do NOT say 'I am searching', 'looking that up', 'checking updates', 'please give me a moment', or 'I will be with you in a moment'). You cannot search in the background. If you need information, you MUST execute the tool call right now.\n"
+            "- Formulate complete, standalone search queries: if the user refers to previous context or pronouns (e.g., 'search it', 'look that up', 'check for that'), resolve the topic into a complete standalone search query (e.g. query='positive news events New Delhi').\n"
             "- NEVER say you cannot browse the internet, do not have real-time information, or cite a knowledge cutoff date. Always execute the appropriate tool to look up the answer.\n\n"
             f"{cls._VOICE_RULES}"
         )
