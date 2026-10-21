@@ -14,10 +14,10 @@ from rich.console import Console
 os.environ.setdefault("ORT_LOGGING_LEVEL", "3")
 
 
-def _setup_logging() -> None:
+def _setup_logging(benchmark_enabled: bool | None = None) -> None:
     """Redirect application and benchmark logs to logs/ directory with immediate flushing."""
     from services.logging_config import setup_app_logging
-    setup_app_logging()
+    setup_app_logging(benchmark_enabled=benchmark_enabled)
 
 
 
@@ -52,6 +52,12 @@ def main() -> None:
         help="Display real-time turn timeline and compare latencies against README benchmarks",
     )
     parser.add_argument(
+        "--benchmark",
+        action="store_true",
+        default=os.getenv("BENCHMARK_ENABLED", "false").lower() in ("true", "1", "yes"),
+        help="Enable latency benchmarking, tool performance tracking, and session benchmark averages",
+    )
+    parser.add_argument(
         "--voice",
         type=str,
         default=os.getenv("VOICECHAT_TTS_VOICE"),
@@ -65,7 +71,9 @@ def main() -> None:
     )
     args, _ = parser.parse_known_args()
 
-    _setup_logging()
+    from constants import set_benchmark_enabled
+    set_benchmark_enabled(args.benchmark)
+    _setup_logging(args.benchmark)
     logger = logging.getLogger(__name__)
 
     # Pipe application and service logs to console during startup alongside spinner
@@ -193,6 +201,7 @@ def main() -> None:
             verbose=args.verbose,
             trigger_mode=is_trigger_mode,
             assistant_name=ASSISTANT_NAME,
+            benchmark_enabled=args.benchmark,
         )
         manager = ConversationManager(
             stt=stt,
@@ -329,14 +338,14 @@ def main() -> None:
                 role_label = "You" if msg["role"] == "user" else "Waffle"
                 print(f"{idx}. [{role_label}] {msg['text']}")
 
-        # Output benchmark summary and log to logs/
-        if ui is not None and hasattr(ui, "benchmark_tracker"):
+        # Output benchmark summary and log to logs/ (only if --benchmark is set)
+        if args.benchmark and ui is not None and hasattr(ui, "benchmark_tracker") and ui.benchmark_tracker.enabled:
             summary_card = ui.benchmark_tracker.log_session_summary()
             if ui.benchmarks:
                 print("\n" + summary_card)
                 print("[dim]Detailed records appended to logs/voicechat.log, logs/benchmark.log, and logs/benchmarks.jsonl[/dim]\n")
 
-        if args.verbose and ui.benchmarks:
+        if args.benchmark and args.verbose and ui.benchmarks:
             print("\n" + "=" * 70)
             print("PER-TURN LATENCY TIMELINE & README BENCHMARK COMPARISON")
             print("=" * 70)

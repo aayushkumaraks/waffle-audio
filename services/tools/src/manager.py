@@ -13,6 +13,7 @@ from constants import (
     DUCKDUCKGO_SEARCH_ENABLED,
     MCP_CONFIG_PATH,
     TOOLS_ENABLED,
+    is_benchmark_enabled,
 )
 from .mcp_client import MCPClientManager, MCPServerConfig, MCPToolDefinition
 from .search import DuckDuckGoSearch
@@ -339,16 +340,17 @@ class ToolManager:
             "result_preview": result[:120] if result else "",
         }
 
-        logger.info(
-            "[TOOL BENCHMARK] Tool '%s' executed on '%s' in %.3fs (%.1fms, fallback=%s, status=%s, size=%d chars)",
-            name,
-            server_name,
-            elapsed,
-            elapsed * 1000.0,
-            fallback_used,
-            status,
-            len(result),
-        )
+        if is_benchmark_enabled():
+            logger.info(
+                "[TOOL BENCHMARK] Tool '%s' executed on '%s' in %.3fs (%.1fms, fallback=%s, status=%s, size=%d chars)",
+                name,
+                server_name,
+                elapsed,
+                elapsed * 1000.0,
+                fallback_used,
+                status,
+                len(result),
+            )
 
         return result
 

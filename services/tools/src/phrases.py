@@ -11,7 +11,7 @@ import threading
 import time
 from typing import Any, Callable
 
-from constants import FILLER_PHRASES_ENABLED
+from constants import FILLER_PHRASES_ENABLED, is_benchmark_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -172,29 +172,31 @@ class PhraseManager:
         if speak_fn is not None:
             try:
                 speak_fn(phrase_text)
-                elapsed = time.perf_counter() - t_start
-                logger.info(
-                    "[FILLER BENCHMARK] Spoke filler phrase [%s / %s] '%s' for tool '%s' via callback in %.4fs",
-                    chosen.get("category", "general"),
-                    chosen.get("emotion", "neutral"),
-                    phrase_text,
-                    tool_name,
-                    elapsed,
-                )
+                if is_benchmark_enabled():
+                    elapsed = time.perf_counter() - t_start
+                    logger.info(
+                        "[FILLER BENCHMARK] Spoke filler phrase [%s / %s] '%s' for tool '%s' via callback in %.4fs",
+                        chosen.get("category", "general"),
+                        chosen.get("emotion", "neutral"),
+                        phrase_text,
+                        tool_name,
+                        elapsed,
+                    )
             except Exception as exc:
                 logger.warning("Error dispatching filler phrase to speak callback: %s", exc)
         elif self._tts is not None and hasattr(self._tts, "speak"):
             try:
                 self._tts.speak(phrase_text)
-                elapsed = time.perf_counter() - t_start
-                logger.info(
-                    "[FILLER BENCHMARK] Spoke filler phrase [%s / %s] '%s' for tool '%s' via TTSService in %.4fs",
-                    chosen.get("category", "general"),
-                    chosen.get("emotion", "neutral"),
-                    phrase_text,
-                    tool_name,
-                    elapsed,
-                )
+                if is_benchmark_enabled():
+                    elapsed = time.perf_counter() - t_start
+                    logger.info(
+                        "[FILLER BENCHMARK] Spoke filler phrase [%s / %s] '%s' for tool '%s' via TTSService in %.4fs",
+                        chosen.get("category", "general"),
+                        chosen.get("emotion", "neutral"),
+                        phrase_text,
+                        tool_name,
+                        elapsed,
+                    )
             except Exception as exc:
                 logger.warning("Error dispatching filler phrase to TTSService: %s", exc)
         else:

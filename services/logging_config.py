@@ -12,6 +12,9 @@ import os
 from pathlib import Path
 
 
+from constants import is_benchmark_enabled
+
+
 class FlushingFileHandler(logging.FileHandler):
     """FileHandler that flushes immediately after every emit so logs appear in real-time."""
 
@@ -25,8 +28,10 @@ def setup_app_logging(
     level: int = logging.INFO,
     main_log_file: str = "voicechat.log",
     benchmark_log_file: str = "benchmark.log",
-) -> None:
+    benchmark_enabled: bool | None = None,
+) -> list[logging.Handler]:
     """Initialize file logging for the application and benchmark systems."""
+    is_bm = is_benchmark_enabled() if benchmark_enabled is None else bool(benchmark_enabled)
     log_path = Path(log_dir)
     log_path.mkdir(parents=True, exist_ok=True)
 
@@ -52,18 +57,22 @@ def setup_app_logging(
     main_handler.setFormatter(formatter)
     root.addHandler(main_handler)
 
-    # 2. Configure dedicated benchmark logger
+    handlers: list[logging.Handler] = [main_handler]
+
+    # 2. Configure dedicated benchmark logger (only if benchmark is enabled)
     bm_logger = logging.getLogger("waffle.benchmark")
-    bm_logger.setLevel(logging.INFO)
+    bm_logger.setLevel(logging.INFO if is_bm else logging.WARNING)
     bm_logger.propagate = False  # Avoid duplicating in root if already writing directly
 
     for h in list(bm_logger.handlers):
         bm_logger.removeHandler(h)
 
-    bm_handler = FlushingFileHandler(benchmark_log, encoding="utf-8")
-    bm_handler.setLevel(logging.INFO)
-    bm_handler.setFormatter(logging.Formatter("%(message)s"))
-    bm_logger.addHandler(bm_handler)
+    if is_bm:
+        bm_handler = FlushingFileHandler(benchmark_log, encoding="utf-8")
+        bm_handler.setLevel(logging.INFO)
+        bm_handler.setFormatter(logging.Formatter("%(message)s"))
+        bm_logger.addHandler(bm_handler)
+        handlers.append(bm_handler)
 
     for name in [
         "httpx",
@@ -78,4 +87,4 @@ def setup_app_logging(
     ]:
         logging.getLogger(name).setLevel(logging.WARNING)
 
-    return [main_handler, bm_handler]
+    return handlers

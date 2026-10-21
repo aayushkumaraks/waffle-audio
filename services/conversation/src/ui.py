@@ -46,11 +46,17 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
         trigger_mode: bool = False,
         assistant_name: str = "Waffle",
         benchmark_tracker: BenchmarkTracker | None = None,
+        benchmark_enabled: bool | None = None,
     ) -> None:
         self._verbose = verbose
         self._trigger_mode = trigger_mode
         self._assistant_name = assistant_name.strip() if assistant_name else "Waffle"
-        self._benchmark_tracker = benchmark_tracker or get_benchmark_tracker()
+        if benchmark_tracker is not None:
+            self._benchmark_tracker = benchmark_tracker
+            if benchmark_enabled is not None:
+                self._benchmark_tracker.enabled = bool(benchmark_enabled)
+        else:
+            self._benchmark_tracker = get_benchmark_tracker(enabled=benchmark_enabled)
         self._lock = threading.Lock()
         self._status: StatusType = "READY"
         self._history: list[dict[str, str]] = []

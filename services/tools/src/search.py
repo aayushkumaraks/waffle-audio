@@ -6,6 +6,8 @@ import re
 import time
 from typing import Any
 
+from constants import is_benchmark_enabled
+
 logger = logging.getLogger(__name__)
 
 
@@ -90,9 +92,9 @@ class DuckDuckGoSearch:
                     pass
             now = datetime.now(tz=tz).astimezone(tz=tz) if tz else datetime.now().astimezone()
             date_str = now.strftime("%A, %B %d, %Y")
-            time_str = now.strftime("%I:%M %p %Z").strip()
-            elapsed = time.perf_counter() - t_start
-            logger.info("[SEARCH BENCHMARK] Instant authoritative date/time query resolved in %.4fs: '%s'", elapsed, query)
+            if is_benchmark_enabled():
+                elapsed = time.perf_counter() - t_start
+                logger.info("[SEARCH BENCHMARK] Instant authoritative date/time query resolved in %.4fs: '%s'", elapsed, query)
             return f"Current authoritative date and time: Today is {date_str}, and the current local time is {time_str}."
 
         if DDGS is None:
@@ -153,16 +155,20 @@ class DuckDuckGoSearch:
                         logger.debug("ddgs.text news fallback failed for '%s': %s", news_text_query, e)
 
         except Exception as exc:
-            elapsed = time.perf_counter() - t_start
-            logger.warning("[SEARCH BENCHMARK] DuckDuckGo search error for '%s' after %.3fs: %s", query, elapsed, exc)
+            if is_benchmark_enabled():
+                elapsed = time.perf_counter() - t_start
+                logger.warning("[SEARCH BENCHMARK] DuckDuckGo search error for '%s' after %.3fs: %s", query, elapsed, exc)
             return f"DuckDuckGo search encountered an issue: {exc}"
 
-        elapsed = time.perf_counter() - t_start
         if not results:
+            if is_benchmark_enabled():
+                elapsed = time.perf_counter() - t_start
+                if last_error is not None and "no results found" not in str(last_error).lower():
+                    logger.warning("[SEARCH BENCHMARK] DuckDuckGo search yielded error for '%s' after %.3fs: %s", query, elapsed, last_error)
+                else:
+                    logger.info("[SEARCH BENCHMARK] DuckDuckGo search found 0 results for '%s' in %.3fs", query, elapsed)
             if last_error is not None and "no results found" not in str(last_error).lower():
-                logger.warning("[SEARCH BENCHMARK] DuckDuckGo search yielded error for '%s' after %.3fs: %s", query, elapsed, last_error)
                 return f"DuckDuckGo search encountered an issue: {last_error}"
-            logger.info("[SEARCH BENCHMARK] DuckDuckGo search found 0 results for '%s' in %.3fs", query, elapsed)
             return f"No search results found for query: '{query}'."
 
         formatted_lines = [f"Search results for '{query}':"]
@@ -175,11 +181,13 @@ class DuckDuckGoSearch:
             formatted_lines.append(f"{idx}. {title}: {body}")
 
         formatted = "\n".join(formatted_lines)
-        logger.info(
-            "[SEARCH BENCHMARK] DuckDuckGo query '%s' executed in %.3fs (%d results, size=%d chars)",
-            query,
-            elapsed,
-            len(results),
-            len(formatted),
-        )
+        if is_benchmark_enabled():
+            elapsed = time.perf_counter() - t_start
+            logger.info(
+                "[SEARCH BENCHMARK] DuckDuckGo query '%s' executed in %.3fs (%d results, size=%d chars)",
+                query,
+                elapsed,
+                len(results),
+                len(formatted),
+            )
         return formatted

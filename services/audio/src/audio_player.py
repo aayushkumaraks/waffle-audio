@@ -9,7 +9,7 @@ from typing import Callable, TypeAlias
 import numpy as np
 import sounddevice as sd
 
-from constants import AUDIO_OUTPUT_DEVICE
+from constants import AUDIO_OUTPUT_DEVICE, is_benchmark_enabled
 from services.tts.src.tts_types import (
     AudioBuffer,
     TTSListener,
@@ -186,7 +186,8 @@ class AudioPlayer(TTSListener):
             self._turn_active = False
             finished_text = self._accumulated_text
             self._accumulated_text = ""
-        logger.info("[AUDIO BENCHMARK] Audio playback completed for turn (spoken='%.40s...')", finished_text)
+        if is_benchmark_enabled():
+            logger.info("[AUDIO BENCHMARK] Audio playback completed for turn (spoken='%.40s...')", finished_text)
         self._dispatch_playback_completed()
 
 

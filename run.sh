@@ -102,6 +102,9 @@ for arg in "$@"; do
     if [[ "$arg" == "--verbose" || "$arg" == "-v" ]]; then
         echo -e "${CYAN}[INFO]${RESET} Verbose latency profiling & README benchmark comparison enabled."
     fi
+    if [[ "$arg" == "--benchmark" ]]; then
+        echo -e "${CYAN}[INFO]${RESET} Latency benchmarking, tool metrics & session summary enabled."
+    fi
     if [[ "$arg" == "--trigger-mode" ]]; then
         ASSISTANT_NAME_VAL=$(uv run --no-sync python -c "import constants; print(constants.ASSISTANT_NAME)" 2>/dev/null || echo "Waffle")
         echo -e "${YELLOW}[Trigger Mode]${RESET} Assistant will only process and respond when 'Hey ${ASSISTANT_NAME_VAL}' is spoken."

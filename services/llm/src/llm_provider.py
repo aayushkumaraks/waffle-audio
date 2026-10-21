@@ -20,6 +20,7 @@ from constants import (
     USER_LOCATION,
     USER_NAME,
     USER_TIMEZONE,
+    is_benchmark_enabled,
 )
 from models import Message
 from services.tools import PhraseManager, ToolManager
@@ -348,21 +349,22 @@ class LLMProvider:
                 if generation_started:
                     callbacks.on_generation_completed(collected_content)
 
-        elapsed = time.perf_counter() - t_start
-        ttft = (t_first_tok - t_start) if t_first_tok else elapsed
-        if tool_calls:
-            logger.info(
-                "[LLM BENCHMARK] Model emitted %d tool call(s) in %.3fs (decision latency)",
-                len(tool_calls),
-                elapsed,
-            )
-        else:
-            logger.info(
-                "[LLM BENCHMARK] Direct LLM generation completed in %.3fs (TTFT: %.3fs, len=%d chars)",
-                elapsed,
-                ttft,
-                len(collected_content),
-            )
+        if is_benchmark_enabled():
+            elapsed = time.perf_counter() - t_start
+            ttft = (t_first_tok - t_start) if t_first_tok else elapsed
+            if tool_calls:
+                logger.info(
+                    "[LLM BENCHMARK] Model emitted %d tool call(s) in %.3fs (decision latency)",
+                    len(tool_calls),
+                    elapsed,
+                )
+            else:
+                logger.info(
+                    "[LLM BENCHMARK] Direct LLM generation completed in %.3fs (TTFT: %.3fs, len=%d chars)",
+                    elapsed,
+                    ttft,
+                    len(collected_content),
+                )
 
         return tool_calls, collected_content
 
@@ -527,19 +529,18 @@ class LLMProvider:
 
             t_followup_end = time.perf_counter()
             if generation_started and not self._abort_event.is_set():
-                fu_first_tok_dur = (t_followup_first_tok - t_followup_start) if t_followup_first_tok else 0.0
-                fu_full_dur = t_followup_end - t_followup_start
-                logger.info(
-                    "[LLM BENCHMARK] Tool follow-up LLM stream completed in %.3fs (TTFT: %.3fs, len=%d chars)",
-                    fu_full_dur,
-                    fu_first_tok_dur,
-                    len(generated_text),
-                )
-                if hasattr(callbacks, "record_followup_llm"):
-                    try:
-                        callbacks.record_followup_llm(fu_first_tok_dur, fu_full_dur)
-                    except Exception:
-                        pass
+                if is_benchmark_enabled():
+                    logger.info(
+                        "[LLM BENCHMARK] Tool follow-up LLM stream completed in %.3fs (TTFT: %.3fs, len=%d chars)",
+                        fu_full_dur,
+                        fu_first_tok_dur,
+                        len(generated_text),
+                    )
+                    if hasattr(callbacks, "record_followup_llm"):
+                        try:
+                            callbacks.record_followup_llm(fu_first_tok_dur, fu_full_dur)
+                        except Exception:
+                            pass
                 callbacks.on_generation_completed(generated_text)
         finally:
             response.close()

@@ -21,10 +21,33 @@ class TestBenchmarkTracker(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
         self.logs_path = Path(self.temp_dir)
-        self.tracker = BenchmarkTracker(logs_dir=self.logs_path)
+        self.tracker = BenchmarkTracker(logs_dir=self.logs_path, enabled=True)
 
     def tearDown(self):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_benchmark_disabled_does_not_log_or_track(self):
+        """Verify tracker is a complete no-op when benchmark is disabled."""
+        disabled_tracker = BenchmarkTracker(logs_dir=self.logs_path, enabled=False)
+        self.assertFalse(disabled_tracker.enabled)
+
+        disabled_tracker.record_tool_execution("test_tool", {}, 0.5)
+        disabled_tracker.record_filler_phrase("thinking...", "test", "neutral")
+        disabled_tracker.record_followup_llm(0.2, 0.5)
+        metric = disabled_tracker.record_turn("hi", "hello", 0.1, 0.2, 0.3, 0.4, 0.5, 0.6)
+
+        stats = disabled_tracker.get_cumulative_stats()
+        self.assertEqual(stats["total_turns"], 0)
+        self.assertEqual(stats["basic_turns_count"], 0)
+        self.assertEqual(stats["tool_turns_count"], 0)
+
+        self.assertEqual(disabled_tracker.format_turn_card(metric), "")
+        self.assertEqual(disabled_tracker.format_averages_summary(), "")
+        self.assertEqual(disabled_tracker.log_session_summary(), "")
+
+        # Files must not have been created by disabled tracker
+        jsonl_path = self.logs_path / "benchmarks.jsonl"
+        self.assertFalse(jsonl_path.exists())
 
     def test_record_basic_conversation_turn(self):
         """Verify recording a basic turn (without tools) updates stats and logs."""
@@ -206,9 +229,9 @@ class TestLoggingConfig(unittest.TestCase):
                 pass
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def test_setup_app_logging_creates_files(self):
-        self.handlers = setup_app_logging(self.logs_path)
-        self.assertGreaterEqual(len(self.handlers), 2)
+    def test_setup_app_logging_with_benchmark_enabled(self):
+        self.handlers = setup_app_logging(self.logs_path, benchmark_enabled=True)
+        self.assertEqual(len(self.handlers), 2)
 
         test_logger = logging.getLogger("voicechat.test")
         test_logger.info("Test message for voicechat log")
@@ -227,6 +250,19 @@ class TestLoggingConfig(unittest.TestCase):
 
         self.assertIn("Test message for voicechat log", v_content)
         self.assertIn("Test benchmark message", b_content)
+
+    def test_setup_app_logging_with_benchmark_disabled(self):
+        self.handlers = setup_app_logging(self.logs_path, benchmark_enabled=False)
+        self.assertEqual(len(self.handlers), 1)
+
+        test_logger = logging.getLogger("voicechat.test_disabled")
+        test_logger.info("Normal message")
+
+        voicechat_file = self.logs_path / "voicechat.log"
+        benchmark_file = self.logs_path / "benchmark.log"
+
+        self.assertTrue(voicechat_file.exists())
+        self.assertFalse(benchmark_file.exists())
 
 
 if __name__ == "__main__":

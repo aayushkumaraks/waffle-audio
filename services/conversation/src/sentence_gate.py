@@ -32,6 +32,8 @@ import threading
 from collections import deque
 from typing import Callable
 
+from constants import is_benchmark_enabled
+
 logger = logging.getLogger(__name__)
 
 # Words that strongly suggest the utterance has not yet ended.
@@ -202,12 +204,13 @@ class SentenceGate:
 
         score = _completeness_score(text)
         self._history.append(score)
-        logger.info(
-            "[GATE BENCHMARK] SentenceGate silence timer fired (score=%.2f, words=%d): '%s'",
-            score,
-            len(text.split()),
-            text,
-        )
+        if is_benchmark_enabled():
+            logger.info(
+                "[GATE BENCHMARK] SentenceGate silence timer fired (score=%.2f, words=%d): '%s'",
+                score,
+                len(text.split()),
+                text,
+            )
         self._callback(text)
 
     def _compute_delay(self, accumulated_text: str) -> float:

@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from constants import BENCHMARK_ENABLED, is_benchmark_enabled
+
 # README benchmark reference targets (seconds)
 README_TARGET_GATE = 0.40          # Sentence gate silence wait
 README_TARGET_FIRST_TOKEN = 0.45    # LLM first token (TTFT)
@@ -91,11 +93,13 @@ class BenchmarkTracker:
         benchmark_file: str = "benchmark.log",
         jsonl_file: str = "benchmarks.jsonl",
         logs_dir: Path | str | None = None,
+        enabled: bool | None = None,
     ) -> None:
         target_dir = logs_dir if logs_dir is not None else log_dir
         self.log_dir = Path(target_dir)
         self.benchmark_log_path = self.log_dir / benchmark_file
         self.jsonl_path = self.log_dir / jsonl_file
+        self.enabled: bool = bool(enabled) if enabled is not None else is_benchmark_enabled()
 
         self._lock = threading.Lock()
         self._turn_counter: int = 0
@@ -163,6 +167,9 @@ class BenchmarkTracker:
             result_len=result_len,
             result_preview=result_preview[:120] if result_preview else "",
         )
+        if not self.enabled:
+            return metric
+
         with self._lock:
             self._current_turn_tools.append(metric)
 
@@ -184,6 +191,8 @@ class BenchmarkTracker:
         self, text: str, category: str = "", emotion: str = ""
     ) -> None:
         """Record the spoken filler phrase for the active turn."""
+        if not self.enabled:
+            return
         with self._lock:
             self._current_filler = {
                 "text": text,
@@ -195,6 +204,8 @@ class BenchmarkTracker:
         self, first_token_dur: float, full_dur: float
     ) -> None:
         """Record follow-up LLM stream timings after tool execution."""
+        if not self.enabled:
+            return
         with self._lock:
             self._current_followup_ttft = first_token_dur
             self._current_followup_done = full_dur
@@ -224,6 +235,14 @@ class BenchmarkTracker:
         speech_duration: float = 0.0,
     ) -> TurnMetric:
         """Finalize and record a turn with all its latency metrics, update running averages, and write to logs."""
+        if not self.enabled:
+            return TurnMetric(
+                turn_index=0,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                turn_type="basic_conversation",
+                user_text=user_text.strip(),
+                assistant_text=assistant_text.strip(),
+            )
         with self._lock:
             self._turn_counter += 1
             turn_idx = self._turn_counter
@@ -293,6 +312,8 @@ class BenchmarkTracker:
 
     def format_turn_card(self, metric: TurnMetric) -> str:
         """Create a human-readable latency and benchmark card for a single turn."""
+        if not self.enabled:
+            return ""
         lines = [
             "=" * 78,
             f"📊 BENCHMARK RECORD — Turn #{metric.turn_index} [{metric.turn_type.upper().replace('_', ' ')}]",
@@ -368,6 +389,8 @@ class BenchmarkTracker:
 
     def format_averages_summary(self) -> str:
         """Create a human-readable cumulative averages summary across the entire session."""
+        if not self.enabled:
+            return ""
         with self._lock:
             total_turns = self._turn_counter
             basic_count = self._basic_turns_count
@@ -474,6 +497,9 @@ class BenchmarkTracker:
 
     def _write_logs(self, metric: TurnMetric) -> None:
         """Write turn metrics and updated averages to all target files in logs/."""
+        if not self.enabled:
+            return
+
         card = self.format_turn_card(metric)
         averages = self.format_averages_summary()
 
@@ -500,6 +526,9 @@ class BenchmarkTracker:
 
     def log_session_summary(self) -> str:
         """Log and return the final cumulative averages summary at shutdown."""
+        if not self.enabled:
+            return ""
+
         summary = self.format_averages_summary()
         logger.info("\n%s", summary)
         try:
@@ -516,10 +545,14 @@ _GLOBAL_TRACKER: BenchmarkTracker | None = None
 _TRACKER_LOCK = threading.Lock()
 
 
-def get_benchmark_tracker() -> BenchmarkTracker:
+def get_benchmark_tracker(enabled: bool | None = None) -> BenchmarkTracker:
     """Return the global BenchmarkTracker instance, creating it if needed."""
     global _GLOBAL_TRACKER
     with _TRACKER_LOCK:
         if _GLOBAL_TRACKER is None:
-            _GLOBAL_TRACKER = BenchmarkTracker()
+            _GLOBAL_TRACKER = BenchmarkTracker(enabled=enabled)
+        elif enabled is not None:
+            _GLOBAL_TRACKER.enabled = bool(enabled)
+        else:
+            _GLOBAL_TRACKER.enabled = is_benchmark_enabled()
         return _GLOBAL_TRACKER
