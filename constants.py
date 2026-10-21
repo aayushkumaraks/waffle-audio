@@ -132,6 +132,35 @@ def resolve_voice_spec(voice: str | None, default: str = POCKET_TTS_DEFAULT_VOIC
 
     return v
 
+
+# ---------------------------------------------------------------------------
+# Emotion Voices
+# ---------------------------------------------------------------------------
+
+AVAILABLE_EMOTIONS: tuple[str, ...] = ("neutral", "happy", "sad", "angry")
+AVAILABLE_GENDERS: tuple[str, ...] = ("female", "male")
+
+
+def get_emotion_voice_path(
+    gender: str,
+    emotion: str,
+    directory: Path | str | None = None,
+) -> Path:
+    """Resolve the .safetensors path for a given gender and emotion."""
+    target_dir = Path(directory) if directory is not None else CLONED_VOICES_DIR
+    g = (gender or "female").strip().lower()
+    e = (emotion or "neutral").strip().lower()
+
+    candidate1 = target_dir / f"{e}_{g}.safetensors"
+    if candidate1.is_file():
+        return candidate1.resolve()
+
+    candidate2 = target_dir / f"{g}_{e}.safetensors"
+    if candidate2.is_file():
+        return candidate2.resolve()
+
+    return candidate1
+
 # ---------------------------------------------------------------------------
 # HTTP API
 # ---------------------------------------------------------------------------

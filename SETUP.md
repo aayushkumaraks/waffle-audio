@@ -137,6 +137,20 @@ voiceModels/
 └── voices-v1.0.bin
 ```
 
+### Emotional Voice Models Setup
+
+Waffle Audio includes an experimental multi-emotion voice cloning system:
+1. Emotion clips (`voices/output/*.wav`) from the CREMA-D dataset provide audio prompts for 4 emotional states (`neutral`, `happy`, `sad`, `angry`) across female (actor 1003) and male (actor 1011) voices.
+2. Generate all emotion `.safetensors` models into `cloned_voices/`:
+```bash
+uv run python generate_emotion_voices.py
+```
+*(Note: `./run-with-emotion.sh` automatically checks and generates missing models on startup).*
+3. Run the emotional voice assistant:
+```bash
+./run-with-emotion.sh
+```
+
 ---
 
 ## 5. Verify audio
