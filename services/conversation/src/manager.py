@@ -128,6 +128,7 @@ class ConversationManager(LLMListener):
 
     def _handle_transcript_started(self, text: str) -> None:
         logger.debug("Speech started: %s", text)
+        self._compactor.abort()
         self._gate.notify_speech_active()
 
     def _handle_transcript_updated(self, text: str) -> None:
@@ -184,6 +185,9 @@ class ConversationManager(LLMListener):
 
     def _trigger_llm(self, text: str) -> None:
         """Called by SentenceGate once the utterance looks complete."""
+        # Yield all resources to the active user turn by aborting background compaction
+        self._compactor.abort()
+
         self._history.append(
             Message(
                 role="user",
@@ -191,7 +195,6 @@ class ConversationManager(LLMListener):
             )
         )
         self._prune_history()
-        self._trigger_compaction_if_needed()
 
         if self._on_user_turn is not None:
             try:
@@ -281,6 +284,7 @@ class ConversationManager(LLMListener):
     def barge_in(self) -> None:
         """Instantly interrupt assistant speech and ongoing LLM generation."""
         logger.info("Barge-in: interrupting LLM generation and flushing TTS/audio.")
+        self._compactor.abort()
         with self._state_lock:
             was_pending = self._pending_generation
             self._pending_generation = False

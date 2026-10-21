@@ -15,6 +15,7 @@ class TestContextCompactor(unittest.TestCase):
             max_turns=3,  # 6 messages
             char_limit=200,
             preserve_turns=1,  # 2 messages
+            use_llm=True,
         )
 
     def test_should_not_compact_when_disabled(self) -> None:
@@ -166,6 +167,92 @@ class TestContextCompactor(unittest.TestCase):
         self.assertIn("Prior Context Summary", manager._history[0].content)
         self.assertEqual(manager._history[-2].content, "New urgent question")
         self.assertEqual(manager._history[-1].content, "New quick answer")
+
+    def test_fast_heuristic_default_does_not_call_http(self) -> None:
+        """When use_llm is False (default), compaction runs instantly without any HTTP/Ollama network requests."""
+        fast_compactor = ContextCompactor(
+            enabled=True,
+            max_turns=2,
+            char_limit=100,
+            preserve_turns=1,
+            use_llm=False,
+        )
+
+        history = [
+            Message(role="user", content="Where is Berlin?"),
+            Message(role="assistant", content="Berlin is the capital of Germany."),
+            Message(role="user", content="What is the currency?"),
+            Message(role="assistant", content="The currency is the Euro."),
+        ]
+
+        result_compacted = []
+        callback_called = False
+
+        def on_compacted(compacted: list[Message], snap_len: int) -> None:
+            nonlocal result_compacted, callback_called
+            result_compacted = compacted
+            callback_called = True
+
+        launched = fast_compactor.compact_async(history, on_compacted)
+        self.assertTrue(launched)
+
+        # Wait briefly for thread to finish (should be immediate)
+        start = time.time()
+        while not callback_called and (time.time() - start) < 1.0:
+            time.sleep(0.02)
+
+        self.assertTrue(callback_called)
+        self.assertEqual(len(result_compacted), 3)
+        self.assertIn("Berlin", result_compacted[0].content)
+
+    def test_abort_cancels_background_compaction(self) -> None:
+        """Calling abort() signals the background compactor thread to exit cleanly without modifying history."""
+        slow_compactor = ContextCompactor(
+            enabled=True,
+            max_turns=2,
+            char_limit=100,
+            preserve_turns=1,
+            use_llm=True,
+        )
+
+        callback_invoked = False
+
+        def on_compacted(compacted: list[Message], snap_len: int) -> None:
+            nonlocal callback_invoked
+            callback_invoked = True
+
+        history = [
+            Message(role="user", content="User message 1"),
+            Message(role="assistant", content="Assistant reply 1"),
+            Message(role="user", content="User message 2"),
+            Message(role="assistant", content="Assistant reply 2"),
+        ]
+
+        # Pre-set abort
+        slow_compactor.abort()
+        launched = slow_compactor.compact_async(history, on_compacted)
+        self.assertTrue(launched)
+
+        # Ensure callback was never invoked because it was aborted
+        time.sleep(0.1)
+        self.assertFalse(callback_invoked)
+
+    def test_manager_aborts_compactor_on_trigger_llm(self) -> None:
+        """When a user utterance arrives, manager aborts in-flight compaction so all compute is given to generation."""
+        mock_stt = MagicMock()
+        mock_llm = MagicMock()
+        mock_tts = MagicMock()
+        mock_compactor = MagicMock()
+
+        manager = ConversationManager(
+            stt=mock_stt,
+            llm=mock_llm,
+            tts=mock_tts,
+            compactor=mock_compactor,
+        )
+
+        manager._trigger_llm("Can you help me?")
+        mock_compactor.abort.assert_called_once()
 
 
 if __name__ == "__main__":

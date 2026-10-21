@@ -14,6 +14,7 @@ from constants import (
     CONTEXT_COMPACTOR_ENABLED,
     CONTEXT_COMPACTOR_MAX_TURNS,
     CONTEXT_COMPACTOR_PRESERVE_TURNS,
+    CONTEXT_COMPACTOR_USE_LLM,
     OLLAMA_BASE_URL,
     OLLAMA_KEEP_ALIVE,
     OLLAMA_MODEL,
@@ -39,6 +40,7 @@ class ContextCompactor:
         max_turns: int = CONTEXT_COMPACTOR_MAX_TURNS,
         char_limit: int = CONTEXT_COMPACTOR_CHAR_LIMIT,
         preserve_turns: int = CONTEXT_COMPACTOR_PRESERVE_TURNS,
+        use_llm: bool = CONTEXT_COMPACTOR_USE_LLM,
         timeout: float = 15.0,
     ) -> None:
         self.base_url = base_url
@@ -47,11 +49,17 @@ class ContextCompactor:
         self.max_turns = max_turns
         self.char_limit = char_limit
         self.preserve_turns = preserve_turns
+        self.use_llm = use_llm
         self.timeout = timeout
 
         self._lock = threading.Lock()
+        self._abort_event = threading.Event()
         self._is_compacting = False
         self._last_compaction_time: float = 0.0
+
+    def abort(self) -> None:
+        """Signal immediate abort of running compaction to yield all compute to live turns."""
+        self._abort_event.set()
 
     @property
     def is_compacting(self) -> bool:
@@ -102,6 +110,7 @@ class ContextCompactor:
             if self._is_compacting:
                 return False
             self._is_compacting = True
+            self._abort_event.clear()
 
         snapshot = list(history)
         thread = threading.Thread(
@@ -124,6 +133,9 @@ class ContextCompactor:
     ) -> None:
         """Executed inside the dedicated background thread."""
         try:
+            if self._abort_event.is_set():
+                return
+
             preserve_count = max(2, self.preserve_turns * 2)
             if len(snapshot) <= preserve_count:
                 return
@@ -131,7 +143,18 @@ class ContextCompactor:
             to_compact = snapshot[:-preserve_count]
             preserve = snapshot[-preserve_count:]
 
-            summary = self._summarize_messages(to_compact)
+            if self._abort_event.is_set():
+                return
+
+            if self.use_llm:
+                summary = self._summarize_messages(to_compact)
+            else:
+                summary = self._heuristic_summarizer(to_compact)
+
+            if self._abort_event.is_set():
+                logger.info("Context compaction aborted by signal.")
+                return
+
             if not summary:
                 logger.warning("Context compactor produced empty summary; skipping update.")
                 return
@@ -198,6 +221,9 @@ class ContextCompactor:
 
     def _call_ollama_summarizer(self, dialogue: str) -> str:
         """Invoke Ollama in non-streaming mode with strict brevity instructions."""
+        if self._abort_event.is_set():
+            return ""
+
         prompt = (
             "Summarize the key facts, user preferences, names, and topics from this prior conversation "
             "into 1-2 concise, factual sentences. Do not use markdown, bullets, or pleasantries.\n\n"
