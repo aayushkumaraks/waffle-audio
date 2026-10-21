@@ -13,6 +13,7 @@ from models import Message
 from services.stt.src import STTListener, STTService
 from services.llm.src import LLMListener, LLMService
 from services.tts.src import TTSService
+from .compactor import ContextCompactor
 from .sentence_gate import ClauseChunker, SentenceGate
 
 logger = logging.getLogger(__name__)
@@ -46,12 +47,14 @@ class ConversationManager(LLMListener):
         gap_timeout: float = SENTENCE_GATE_GAP_TIMEOUT,
         quick_fire_timeout: float = SENTENCE_GATE_QUICK_FIRE_TIMEOUT,
         max_history_turns: int = 8,
+        compactor: ContextCompactor | None = None,
     ) -> None:
         self._stt = stt
         self._llm = llm
         self._tts = tts
         self._on_user_turn = on_user_turn
         self._max_history_turns = max_history_turns
+        self._compactor = compactor or ContextCompactor()
 
         self._stt_listener = _STTListenerAdapter(self)
 
@@ -142,6 +145,37 @@ class ConversationManager(LLMListener):
 
         self._gate.submit(text)
 
+    @property
+    def compactor(self) -> ContextCompactor:
+        """Returns the active ContextCompactor instance."""
+        return self._compactor
+
+    def _trigger_compaction_if_needed(self) -> None:
+        """Evaluate history and launch background context compaction on a separate thread if threshold is met."""
+        with self._state_lock:
+            history_snapshot = list(self._history)
+
+        if self._compactor.should_compact(history_snapshot):
+            self._compactor.compact_async(history_snapshot, self._on_compaction_completed)
+
+    def _on_compaction_completed(
+        self, compacted_history: list[Message], original_snapshot_len: int
+    ) -> None:
+        """Callback invoked by the background compactor thread when compaction finishes."""
+        with self._state_lock:
+            # Preserve any new turns that were appended during the background compaction
+            newly_arrived = (
+                self._history[original_snapshot_len:]
+                if len(self._history) > original_snapshot_len
+                else []
+            )
+            self._history = compacted_history + newly_arrived
+            logger.info(
+                "ConversationManager history compacted: now %d message(s) (preserved %d newly arrived).",
+                len(self._history),
+                len(newly_arrived),
+            )
+
     def _prune_history(self) -> None:
         """Maintain a strict sliding context window (last N turns) to keep TTFT low."""
         max_messages = self._max_history_turns * 2
@@ -157,6 +191,7 @@ class ConversationManager(LLMListener):
             )
         )
         self._prune_history()
+        self._trigger_compaction_if_needed()
 
         if self._on_user_turn is not None:
             try:
@@ -236,6 +271,7 @@ class ConversationManager(LLMListener):
             )
         )
         self._prune_history()
+        self._trigger_compaction_if_needed()
 
         logger.debug(
             "Conversation history now contains %d message(s).",

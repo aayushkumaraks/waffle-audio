@@ -41,6 +41,18 @@ DUCKDUCKGO_SEARCH_ENABLED: bool = os.getenv("VOICECHAT_DDGS_ENABLED", "true").lo
 DUCKDUCKGO_MAX_RESULTS: int = _int_from_env("VOICECHAT_DDGS_MAX_RESULTS", 4)
 FILLER_PHRASES_ENABLED: bool = os.getenv("VOICECHAT_FILLER_PHRASES_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 
+# ---------------------------------------------------------------------------
+# Context Compactor (Asynchronous Background Conversation Compaction)
+# ---------------------------------------------------------------------------
+
+CONTEXT_COMPACTOR_ENABLED: bool = os.getenv("VOICECHAT_COMPACTOR_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+# Trigger compaction when history reaches or exceeds this number of turns (turn = user+assistant pair)
+CONTEXT_COMPACTOR_MAX_TURNS: int = _int_from_env("VOICECHAT_COMPACTOR_MAX_TURNS", 4)
+# Trigger compaction if total characters across history exceeds this limit (~500-700 tokens)
+CONTEXT_COMPACTOR_CHAR_LIMIT: int = _int_from_env("VOICECHAT_COMPACTOR_CHAR_LIMIT", 2500)
+# Recent turns (pairs) to always preserve verbatim at the end of the history
+CONTEXT_COMPACTOR_PRESERVE_TURNS: int = _int_from_env("VOICECHAT_COMPACTOR_PRESERVE_TURNS", 2)
+
 
 
 # ---------------------------------------------------------------------------
