@@ -156,6 +156,9 @@ class ServiceRuntime:
 
     @classmethod
     def create(cls) -> "ServiceRuntime":
+        from services.logging_config import setup_app_logging
+        setup_app_logging()
+
         stt = STTService(STTConfig())
         vad = VADService()
 

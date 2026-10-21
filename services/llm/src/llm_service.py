@@ -33,7 +33,18 @@ class LLMListener(ABC):
     ) -> None:
         pass
 
-    def on_tool_completed(self, tool_name: str, result: str) -> None:
+    def on_tool_completed(
+        self,
+        tool_name: str,
+        result: str,
+        duration: float = 0.0,
+        fallback: bool = False,
+        server: str = "mcp",
+    ) -> None:
+        pass
+
+    def record_followup_llm(self, first_token_dur: float, full_dur: float) -> None:
+        """Called to record follow-up LLM stream timings after tool execution."""
         pass
 
 
@@ -173,13 +184,38 @@ class LLMService(LLMCallbacks):
             except Exception:
                 logger.debug("Error in listener on_tool_started", exc_info=True)
 
-    def on_tool_completed(self, tool_name: str, result: str) -> None:
-        """Dispatch tool completed."""
+    def on_tool_completed(
+        self,
+        tool_name: str,
+        result: str,
+        duration: float = 0.0,
+        fallback: bool = False,
+        server: str = "mcp",
+    ) -> None:
+        """Dispatch tool completed with benchmark timing and metadata."""
         for listener in tuple(self._listeners):
             try:
-                listener.on_tool_completed(tool_name, result)
+                try:
+                    listener.on_tool_completed(
+                        tool_name, result, duration=duration, fallback=fallback, server=server
+                    )
+                except TypeError:
+                    try:
+                        listener.on_tool_completed(tool_name, result, duration, fallback)
+                    except TypeError:
+                        listener.on_tool_completed(tool_name, result)
             except Exception:
                 logger.debug("Error in listener on_tool_completed", exc_info=True)
+
+    def record_followup_llm(self, first_token_dur: float, full_dur: float) -> None:
+        """Forward follow-up LLM stream timings to listeners."""
+        for listener in tuple(self._listeners):
+            if hasattr(listener, "record_followup_llm"):
+                try:
+                    listener.record_followup_llm(first_token_dur, full_dur)
+                except Exception:
+                    logger.debug("Error in listener record_followup_llm", exc_info=True)
+
 
     @property
     def phrase_manager(self):

@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import random
 import threading
+import time
 from typing import Any, Callable
 
 from constants import FILLER_PHRASES_ENABLED
@@ -163,28 +164,37 @@ class PhraseManager:
         if not self.enabled:
             return None
 
+        t_start = time.perf_counter()
         chosen = self.select_phrase(tool_name, arguments)
         phrase_text = chosen["text"]
 
         speak_fn = callback or self._speak_callback
         if speak_fn is not None:
             try:
+                speak_fn(phrase_text)
+                elapsed = time.perf_counter() - t_start
                 logger.info(
-                    "Speaking filler phrase on the go [%s] '%s'...",
+                    "[FILLER BENCHMARK] Spoke filler phrase [%s / %s] '%s' for tool '%s' via callback in %.4fs",
+                    chosen.get("category", "general"),
                     chosen.get("emotion", "neutral"),
                     phrase_text,
+                    tool_name,
+                    elapsed,
                 )
-                speak_fn(phrase_text)
             except Exception as exc:
                 logger.warning("Error dispatching filler phrase to speak callback: %s", exc)
         elif self._tts is not None and hasattr(self._tts, "speak"):
             try:
+                self._tts.speak(phrase_text)
+                elapsed = time.perf_counter() - t_start
                 logger.info(
-                    "Speaking filler phrase on the go [%s] '%s' via TTSService...",
+                    "[FILLER BENCHMARK] Spoke filler phrase [%s / %s] '%s' for tool '%s' via TTSService in %.4fs",
+                    chosen.get("category", "general"),
                     chosen.get("emotion", "neutral"),
                     phrase_text,
+                    tool_name,
+                    elapsed,
                 )
-                self._tts.speak(phrase_text)
             except Exception as exc:
                 logger.warning("Error dispatching filler phrase to TTSService: %s", exc)
         else:
@@ -194,3 +204,4 @@ class PhraseManager:
             )
 
         return chosen
+

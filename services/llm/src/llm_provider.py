@@ -47,10 +47,20 @@ class LLMCallbacks(ABC):
         """Called when a tool execution is initiated."""
         pass
 
-    def on_tool_completed(self, tool_name: str, result: str) -> None:
+    def on_tool_completed(
+        self,
+        tool_name: str,
+        result: str,
+        duration: float = 0.0,
+        fallback: bool = False,
+        server: str = "mcp",
+    ) -> None:
         """Called when a tool execution has finished."""
         pass
 
+    def record_followup_llm(self, first_token_dur: float, full_dur: float) -> None:
+        """Called to record follow-up LLM stream timings after tool execution."""
+        pass
 
 
 @dataclass(slots=True)
@@ -283,6 +293,8 @@ class LLMProvider:
         generation_started = False
         has_tools_config = bool(payload.get("tools"))
         buffer_threshold = 80 if has_tools_config else 0
+        t_start = time.perf_counter()
+        t_first_tok: float | None = None
 
         with self._client.stream("POST", "/api/chat", json=payload) as response:
             response.raise_for_status()
@@ -320,6 +332,7 @@ class LLMProvider:
                     # Only stream to speech if no tool calls have appeared and buffer threshold is met
                     if not tool_calls and len(collected_content) >= buffer_threshold:
                         if not generation_started:
+                            t_first_tok = time.perf_counter()
                             callbacks.on_generation_started()
                             generation_started = True
                         callbacks.on_generation_updated(collected_content)
@@ -327,11 +340,28 @@ class LLMProvider:
             # If no tool calls occurred, flush any unstreamed content and complete turn
             if not tool_calls and not self._abort_event.is_set():
                 if not generation_started and collected_content.strip():
+                    t_first_tok = time.perf_counter()
                     callbacks.on_generation_started()
                     generation_started = True
                     callbacks.on_generation_updated(collected_content)
                 if generation_started:
                     callbacks.on_generation_completed(collected_content)
+
+        elapsed = time.perf_counter() - t_start
+        ttft = (t_first_tok - t_start) if t_first_tok else elapsed
+        if tool_calls:
+            logger.info(
+                "[LLM BENCHMARK] Model emitted %d tool call(s) in %.3fs (decision latency)",
+                len(tool_calls),
+                elapsed,
+            )
+        else:
+            logger.info(
+                "[LLM BENCHMARK] Direct LLM generation completed in %.3fs (TTFT: %.3fs, len=%d chars)",
+                elapsed,
+                ttft,
+                len(collected_content),
+            )
 
         return tool_calls, collected_content
 
@@ -370,9 +400,25 @@ class LLMProvider:
                 callbacks.on_tool_started(name, args)
 
             # ToolManager executes the tool, or falls back to DuckDuckGo search
+            t_exec_start = time.perf_counter()
             result_str = self._tool_manager.execute_tool(name, args)
-            callbacks.on_tool_completed(name, result_str)
+            t_exec_dur = time.perf_counter() - t_exec_start
 
+            exec_info = getattr(self._tool_manager, "last_execution_info", {})
+            actual_dur = exec_info.get("duration", t_exec_dur)
+            is_fallback = exec_info.get("fallback", False)
+            server_name = exec_info.get("server", "mcp")
+
+            try:
+                callbacks.on_tool_completed(
+                    name,
+                    result_str,
+                    duration=actual_dur,
+                    fallback=is_fallback,
+                    server=server_name,
+                )
+            except TypeError:
+                callbacks.on_tool_completed(name, result_str)
 
             tool_results.append(
                 {
@@ -385,12 +431,6 @@ class LLMProvider:
             return
 
         # Prepare follow-up messages including tool context
-        # Formulate a clear prompt with tool results for the assistant to speak
-        tool_context_lines = ["Tool Execution Results:"]
-        for res in tool_results:
-            tool_context_lines.append(f"[{res['name']} Output]:\n{res['result']}")
-        tool_context = "\n\n".join(tool_context_lines)
-
         sliding_messages = messages[-14:] if len(messages) > 14 else messages
         conversation_context = [
             {"role": m.role if m.role in {"user", "assistant"} else "user", "content": m.content}
@@ -398,7 +438,6 @@ class LLMProvider:
         ]
 
         followup_sys_prompt = self._build_followup_system_prompt()
-        # Use native Ollama tool execution schema: assistant tool_calls + role: tool results
         followup_messages = [
             {"role": "system", "content": followup_sys_prompt},
             *conversation_context,
@@ -429,6 +468,9 @@ class LLMProvider:
         }
 
         # Stream the final answer directly to speech callbacks
+        t_followup_start = time.perf_counter()
+        t_followup_first_tok: float | None = None
+
         req = self._client.build_request("POST", "/api/chat", json=payload)
         response = self._client.send(req, stream=True)
         if response.status_code != 200:
@@ -475,16 +517,32 @@ class LLMProvider:
                     continue
 
                 if not generation_started:
+                    t_followup_first_tok = time.perf_counter()
                     callbacks.on_generation_started()
                     generation_started = True
 
                 generated_text += content
                 callbacks.on_generation_updated(generated_text)
 
+            t_followup_end = time.perf_counter()
             if generation_started and not self._abort_event.is_set():
+                fu_first_tok_dur = (t_followup_first_tok - t_followup_start) if t_followup_first_tok else 0.0
+                fu_full_dur = t_followup_end - t_followup_start
+                logger.info(
+                    "[LLM BENCHMARK] Tool follow-up LLM stream completed in %.3fs (TTFT: %.3fs, len=%d chars)",
+                    fu_full_dur,
+                    fu_first_tok_dur,
+                    len(generated_text),
+                )
+                if hasattr(callbacks, "record_followup_llm"):
+                    try:
+                        callbacks.record_followup_llm(fu_first_tok_dur, fu_full_dur)
+                    except Exception:
+                        pass
                 callbacks.on_generation_completed(generated_text)
         finally:
             response.close()
+
 
     def _detect_text_tool_calls(self, text: str) -> list[dict[str, Any]]:
         """Extract tool calls if the model output tool call syntax as raw text."""

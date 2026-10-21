@@ -184,8 +184,11 @@ class AudioPlayer(TTSListener):
             ):
                 return
             self._turn_active = False
+            finished_text = self._accumulated_text
             self._accumulated_text = ""
+        logger.info("[AUDIO BENCHMARK] Audio playback completed for turn (spoken='%.40s...')", finished_text)
         self._dispatch_playback_completed()
+
 
     def _playback_worker(self) -> None:
         stream: sd.OutputStream | None = None

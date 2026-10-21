@@ -26,10 +26,13 @@ the base value.
 
 from __future__ import annotations
 
+import logging
 import re
 import threading
 from collections import deque
 from typing import Callable
+
+logger = logging.getLogger(__name__)
 
 # Words that strongly suggest the utterance has not yet ended.
 _DANGLING_WORDS = frozenset({
@@ -146,6 +149,7 @@ class SentenceGate:
                 timer.daemon = True
                 timer.start()
                 self._pending_timer = timer
+                logger.debug("[GATE] Speech active; postponed silence timer (delay=%.2fs, buffer='%s')", delay, accumulated)
 
     def submit(self, text: str) -> None:
         """Append a new fragment and reset the silence timer."""
@@ -161,11 +165,19 @@ class SentenceGate:
             if self._pending_timer is not None:
                 self._pending_timer.cancel()
 
+            score = _completeness_score(accumulated)
             delay = self._compute_delay(accumulated)
             timer = threading.Timer(delay, self._fire)
             timer.daemon = True
             timer.start()
             self._pending_timer = timer
+            logger.debug(
+                "[GATE] Fragment '%s' buffered -> accumulated='%s' (completeness=%.2f, delay=%.2fs)",
+                text,
+                accumulated,
+                score,
+                delay,
+            )
 
     def cancel(self) -> None:
         """Cancel any pending callback and clear the buffer (call on shutdown)."""
@@ -190,6 +202,12 @@ class SentenceGate:
 
         score = _completeness_score(text)
         self._history.append(score)
+        logger.info(
+            "[GATE BENCHMARK] SentenceGate silence timer fired (score=%.2f, words=%d): '%s'",
+            score,
+            len(text.split()),
+            text,
+        )
         self._callback(text)
 
     def _compute_delay(self, accumulated_text: str) -> float:

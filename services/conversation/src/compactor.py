@@ -132,6 +132,7 @@ class ContextCompactor:
         on_compacted: Callable[[list[Message], int], None],
     ) -> None:
         """Executed inside the dedicated background thread."""
+        t_start = time.perf_counter()
         try:
             if self._abort_event.is_set():
                 return
@@ -166,10 +167,13 @@ class ContextCompactor:
             compacted_history = [summary_message] + list(preserve)
 
             self._last_compaction_time = time.perf_counter()
+            t_dur = self._last_compaction_time - t_start
             logger.info(
-                "Background context compaction finished: %d older messages compacted into %d chars.",
+                "[COMPACTOR BENCHMARK] Context compaction finished in %.3fs: %d messages compacted into %d chars (preserved %d turns).",
+                t_dur,
                 len(to_compact),
                 len(summary),
+                len(preserve) // 2,
             )
             on_compacted(compacted_history, len(snapshot))
 

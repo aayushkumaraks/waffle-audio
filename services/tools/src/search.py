@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ class DuckDuckGoSearch:
 
         Returns a concise plain-text summary suitable for the speech assistant.
         """
+        t_start = time.perf_counter()
         query = (query or "").strip()
         if not query:
             return "No search query provided."
@@ -89,6 +91,8 @@ class DuckDuckGoSearch:
             now = datetime.now(tz=tz).astimezone(tz=tz) if tz else datetime.now().astimezone()
             date_str = now.strftime("%A, %B %d, %Y")
             time_str = now.strftime("%I:%M %p %Z").strip()
+            elapsed = time.perf_counter() - t_start
+            logger.info("[SEARCH BENCHMARK] Instant authoritative date/time query resolved in %.4fs: '%s'", elapsed, query)
             return f"Current authoritative date and time: Today is {date_str}, and the current local time is {time_str}."
 
         if DDGS is None:
@@ -105,6 +109,7 @@ class DuckDuckGoSearch:
             if USER_LOCATION.lower() not in cleaned.lower():
                 cleaned = f"{cleaned} in {USER_LOCATION}"
 
+        logger.info("[SEARCH] Querying DuckDuckGo: '%s' (cleaned: '%s', is_news: %s, limit: %d)", query, cleaned, is_news, limit)
         last_error: Exception | None = None
         try:
             with DDGS(timeout=self.timeout) as ddgs:
@@ -148,12 +153,16 @@ class DuckDuckGoSearch:
                         logger.debug("ddgs.text news fallback failed for '%s': %s", news_text_query, e)
 
         except Exception as exc:
-            logger.warning("DuckDuckGo search error for '%s': %s", query, exc)
+            elapsed = time.perf_counter() - t_start
+            logger.warning("[SEARCH BENCHMARK] DuckDuckGo search error for '%s' after %.3fs: %s", query, elapsed, exc)
             return f"DuckDuckGo search encountered an issue: {exc}"
 
+        elapsed = time.perf_counter() - t_start
         if not results:
             if last_error is not None and "no results found" not in str(last_error).lower():
+                logger.warning("[SEARCH BENCHMARK] DuckDuckGo search yielded error for '%s' after %.3fs: %s", query, elapsed, last_error)
                 return f"DuckDuckGo search encountered an issue: {last_error}"
+            logger.info("[SEARCH BENCHMARK] DuckDuckGo search found 0 results for '%s' in %.3fs", query, elapsed)
             return f"No search results found for query: '{query}'."
 
         formatted_lines = [f"Search results for '{query}':"]
@@ -165,4 +174,12 @@ class DuckDuckGoSearch:
                 body = body[:997] + "..."
             formatted_lines.append(f"{idx}. {title}: {body}")
 
-        return "\n".join(formatted_lines)
+        formatted = "\n".join(formatted_lines)
+        logger.info(
+            "[SEARCH BENCHMARK] DuckDuckGo query '%s' executed in %.3fs (%d results, size=%d chars)",
+            query,
+            elapsed,
+            len(results),
+            len(formatted),
+        )
+        return formatted
