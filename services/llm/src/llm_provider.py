@@ -62,6 +62,13 @@ class LLMProviderError(Exception):
     """Raised when the LLM provider encounters an error."""
 
 
+def has_tool_call_keyword(text: str | None) -> bool:
+    """Check if the user specifically requested a tool call via the 'tool call' keyword."""
+    if not text:
+        return False
+    return bool(re.search(r"\btool[\s_-]*calls?\b", text, re.IGNORECASE))
+
+
 class LLMProvider:
     """Communicates with the local Ollama server with tool calling & fallback support."""
 
@@ -146,23 +153,34 @@ class LLMProvider:
         """Register a callback (e.g. tts.speak) for on-the-go filler phrase synthesis."""
         self._phrase_manager.set_speak_callback(callback)
 
-
     def generate(
         self,
         messages: Sequence[Message],
         callbacks: LLMCallbacks,
     ) -> None:
-        """Generate a streamed response with MCP tool calling and DuckDuckGo fallback."""
+        """Generate a streamed response. Tools are only sent if the user specifically requested 'Tool call'."""
         self._abort_event.clear()
 
-        tools = self._tool_manager.get_ollama_tools() if self._config.tools_enabled else []
-        payload = self._build_request(messages, tools=tools)
+        last_user_msg = next((m for m in reversed(messages) if m.role == "user"), None)
+        tool_call_requested = (
+            has_tool_call_keyword(last_user_msg.content)
+            if last_user_msg
+            else False
+        )
+
+        tools = (
+            self._tool_manager.get_ollama_tools()
+            if (self._config.tools_enabled and tool_call_requested)
+            else []
+        )
+        sys_prompt = self._TOOL_SYSTEM_PROMPT if tool_call_requested else self._DEFAULT_SYSTEM_PROMPT
+        payload = self._build_request(messages, tools=tools, system_prompt=sys_prompt)
 
         try:
             tool_calls, initial_content = self._stream_or_collect_tools(payload, callbacks)
 
             # Check if text contained inline tool calls if native tool_calls was empty
-            if not tool_calls and initial_content:
+            if tool_call_requested and not tool_calls and initial_content:
                 parsed_calls = self._detect_text_tool_calls(initial_content)
                 if parsed_calls:
                     tool_calls = parsed_calls
@@ -176,8 +194,8 @@ class LLMProvider:
                     callbacks=callbacks,
                 )
             elif not tool_calls and not self._abort_event.is_set():
-                # Check if model refused due to lack of real-time info when a question was asked
-                if self._should_fallback_to_ddg_search(messages, initial_content):
+                # Only fallback to search if the user explicitly requested a tool call
+                if tool_call_requested and self._should_fallback_to_ddg_search(messages, initial_content):
                     logger.info("Model indicated lack of real-time info; invoking DuckDuckGo fallback search.")
                     last_user_query = messages[-1].content if messages else ""
                     self._execute_tools_and_stream_reply(
@@ -495,7 +513,18 @@ class LLMProvider:
         ]
         return any(phrase in asst for phrase in refusal_phrases)
 
-    _SYSTEM_PROMPT = (
+    _DEFAULT_SYSTEM_PROMPT = (
+        "You are a helpful voice assistant named Waffle. You speak in a natural, calm, and friendly conversational tone.\n\n"
+        "SPEECH RULES (STRICT):\n"
+        "Your final responses are read aloud by a text-to-speech engine (Kokoro/Pocket TTS), so strictly adhere to these speech rules:\n"
+        "1. Reply in 2-3 short, spoken sentences only.\n"
+        "2. Output plain spoken English words only. NEVER output markdown tables, bullet points, headers, emojis, URLs, or code blocks.\n"
+        "3. NEVER include asterisked or bracketed actions or expressive tags (e.g. do NOT write *laughs*, *smiles*, [sighs], or *chuckles*).\n"
+        "4. Spell out numbers, measurements, and symbols in full words (e.g., 'three kilometers' not '3km', 'percent' not '%').\n"
+        "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes."
+    )
+
+    _TOOL_SYSTEM_PROMPT = (
         "You are a helpful voice assistant named Waffle. You speak in a natural, calm, and friendly conversational tone.\n\n"
         "TOOL CALLING POLICY (MANDATORY):\n"
         "You have access to tools. Your internal pretraining memory is strictly historical and in the past. You do NOT have access to current real-world facts from memory.\n"
@@ -511,6 +540,8 @@ class LLMProvider:
         "4. Spell out numbers, measurements, and symbols in full words (e.g., 'three kilometers' not '3km', 'percent' not '%').\n"
         "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes."
     )
+
+    _SYSTEM_PROMPT = _DEFAULT_SYSTEM_PROMPT
 
     _FOLLOWUP_SYSTEM_PROMPT = (
         "You are a helpful voice assistant named Waffle. You speak in a natural, calm, and friendly conversational tone.\n\n"
@@ -529,11 +560,12 @@ class LLMProvider:
         self,
         messages: Sequence[Message],
         tools: list[dict[str, Any]] | None = None,
+        system_prompt: str | None = None,
     ) -> dict[str, Any]:
         """Build an Ollama chat request with sliding window guard and optional tools."""
         sliding_messages = messages[-16:] if len(messages) > 16 else messages
 
-        system_message = {"role": "system", "content": self._SYSTEM_PROMPT}
+        system_message = {"role": "system", "content": system_prompt or self._DEFAULT_SYSTEM_PROMPT}
 
         request_payload: dict[str, Any] = {
             "model": self._config.model,

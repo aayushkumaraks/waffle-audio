@@ -8,7 +8,12 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from models import Message
-from services.llm.src.llm_provider import LLMCallbacks, LLMProvider, LLMProviderConfig
+from services.llm.src.llm_provider import (
+    LLMCallbacks,
+    LLMProvider,
+    LLMProviderConfig,
+    has_tool_call_keyword,
+)
 from services.tools import (
     DuckDuckGoSearch,
     MCPClientManager,
@@ -62,6 +67,9 @@ class TestDuckDuckGoSearch(unittest.TestCase):
 
         cleaned = clean_conversational_query("Who is the Prime Minister of United Kingdom right now?")
         self.assertEqual(cleaned, "Prime Minister of United Kingdom")
+
+        cleaned_tool = clean_conversational_query("Tool call, check the latest news in New Delhi")
+        self.assertEqual(cleaned_tool, "latest news in New Delhi")
 
     @patch("services.tools.src.search.DDGS")
     def test_news_query_routes_to_ddgs_news(self, mock_ddgs_class: MagicMock) -> None:
@@ -251,6 +259,54 @@ class TestLLMProviderToolCalling(unittest.TestCase):
 
         asst_normal = "Apples are a nutritious fruit grown across temperate regions."
         self.assertFalse(provider._should_fallback_to_ddg_search(messages, asst_normal))
+
+    def test_has_tool_call_keyword(self) -> None:
+        self.assertTrue(has_tool_call_keyword("Tool call, what's the weather in London?"))
+        self.assertTrue(has_tool_call_keyword("Can you do a tool-call to check time?"))
+        self.assertTrue(has_tool_call_keyword("tool_call: check stock"))
+        self.assertFalse(has_tool_call_keyword("What is the weather today?"))
+        self.assertFalse(has_tool_call_keyword("I need some tools for carpentry"))
+        self.assertFalse(has_tool_call_keyword(""))
+        self.assertFalse(has_tool_call_keyword(None))
+
+    def test_generate_omits_tools_when_no_keyword(self) -> None:
+        mock_tool_manager = MagicMock()
+        mock_tool_manager.get_ollama_tools.return_value = [{"type": "function", "function": {"name": "test_tool"}}]
+        provider = LLMProvider(LLMProviderConfig(tools_enabled=True), tool_manager=mock_tool_manager)
+
+        messages = [Message(role="user", content="What is the capital of France?")]
+        callbacks = DummyCallbacks()
+
+        with patch.object(provider, "_stream_or_collect_tools", return_value=([], "Paris.")) as mock_stream:
+            provider.generate(messages, callbacks)
+            mock_stream.assert_called_once()
+            payload = mock_stream.call_args[0][0]
+            # Tools omitted to keep context light
+            self.assertNotIn("tools", payload)
+            # Default lightweight prompt without tool calling policy
+            system_msg = payload["messages"][0]["content"]
+            self.assertNotIn("TOOL CALLING POLICY", system_msg)
+            mock_tool_manager.get_ollama_tools.assert_not_called()
+
+    def test_generate_includes_tools_when_keyword_present(self) -> None:
+        mock_tool_manager = MagicMock()
+        mock_tool_manager.get_ollama_tools.return_value = [{"type": "function", "function": {"name": "test_tool"}}]
+        provider = LLMProvider(LLMProviderConfig(tools_enabled=True), tool_manager=mock_tool_manager)
+
+        messages = [Message(role="user", content="Tool call, what is the weather in Paris?")]
+        callbacks = DummyCallbacks()
+
+        with patch.object(provider, "_stream_or_collect_tools", return_value=([], "It's sunny.")) as mock_stream:
+            provider.generate(messages, callbacks)
+            mock_stream.assert_called_once()
+            payload = mock_stream.call_args[0][0]
+            # Tools included
+            self.assertIn("tools", payload)
+            self.assertEqual(len(payload["tools"]), 1)
+            # Tool prompt with tool calling policy included
+            system_msg = payload["messages"][0]["content"]
+            self.assertIn("TOOL CALLING POLICY", system_msg)
+            mock_tool_manager.get_ollama_tools.assert_called_once()
 
 
 class TestPhraseManager(unittest.TestCase):

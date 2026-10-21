@@ -20,6 +20,7 @@ except ImportError:
 def clean_conversational_query(query: str) -> str:
     """Strip conversational filler, greetings, and stop question phrasing for search engines."""
     q = (query or "").strip()
+    q = re.sub(r"\btool[\s_-]*calls?\b\s*,?\s*", "", q, flags=re.I)
     q = re.sub(
         r"^(hey|hello|hi|please|waffle|so|um|uh|can you|could you|would you)\b\s*",
         "",
