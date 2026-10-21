@@ -89,9 +89,13 @@ When speech is detected during assistant playback or generation, the **BargeInCo
 - **Instant Interruption (Barge-In)**: Speak at any time to interrupt Waffle mid-sentence. The VAD and AEC detect your voice, stopping speaker playback in <50ms, aborting LLM generation, and clearing TTS queues.
 - **Acoustic Echo Cancellation (AEC)**: Normalized Least Mean Squares (NLMS) filter cancels speaker output from the microphone feed so Waffle never interrupts itself or loops back speech.
 - **Adaptive Clause Chunking**: `ClauseChunker` splits streaming LLM tokens on punctuation (`,`, `;`, `:`) and conjunctions (`and`, `but`, `because`), with a first-chunk fast path (3 words) for sub-200ms TTFB.
+- **Model Context Protocol (MCP) Tool Calling**: Native integration with external MCP servers (stdio and SSE) exposing standard tools for databases, filesystem, web fetching, and more.
+- **DuckDuckGo Search Fallback**: If the user asks for something and no installed tool matches that function, or when real-time facts/news/weather are needed, Waffle automatically queries DuckDuckGo search to get the details.
+- **Tool Installer & Manager (`install_tool.py`)**: One-click installer with curated presets (fetch, sqlite, time, filesystem, memory, github) and interactive management of MCP tools.
 - **Unified In-Process Async Pipeline**: Consolidates audio, VAD, STT, LLM, TTS, and player into a single async loop with zero serialization overhead, alongside POSIX shared memory (`SharedAudioBuffer`) for multi-process deployments.
 - **Sliding Conversation Context**: Retains a rolling 6–8 turns (max 16 messages) to maintain immediate context while preventing inference degradation over long sessions.
 - **Speech-Targeted LLM Formatting**: System prompt enforces natural conversational speech with strictly no markdown, emojis, asterisks, or numbered lists.
+
 
 ## Quick Start (One-Click)
 
@@ -136,7 +140,51 @@ Record 10-15 seconds from your mic or supply an audio file (`.wav`, `.mp3`). `./
 ./run.sh --voice my_voice
 ```
 
+### Tools & MCP (Model Context Protocol) Integration
+
+Waffle Audio integrates with the **Model Context Protocol (MCP)**, allowing your assistant to invoke tools whenever you ask questions or need real-time data:
+
+- **Installed MCP Tools**: If an installed MCP tool matches the requested function (e.g. SQLite database, filesystem, web fetcher, time), Waffle calls that tool directly.
+- **DuckDuckGo Search Fallback**: If no installed tool matches the requested function, or when general web search / real-time facts are needed, Waffle automatically searches DuckDuckGo and reads the answer aloud.
+
+#### Installing Tools to the App
+
+Use the included tool installer script (`install_tool.py` or `./install_tool.sh`):
+
+```bash
+# Launch the interactive tool installer
+uv run python install_tool.py
+
+# Or install from curated presets directly:
+uv run python install_tool.py --preset fetch       # Web page reader & markdown extractor
+uv run python install_tool.py --preset sqlite      # Query SQLite database tables
+uv run python install_tool.py --preset time        # Accurate time & timezone conversions
+uv run python install_tool.py --preset filesystem  # Local file inspection
+uv run python install_tool.py --preset memory      # Persistent knowledge graph memory
+uv run python install_tool.py --preset github      # Inspect GitHub repos, issues, and PRs
+
+# List installed tools & fallback status
+uv run python install_tool.py --list
+
+# Test DuckDuckGo search fallback
+uv run python install_tool.py --test-search "current space discoveries"
+```
+
+All installed tools are saved in `mcp_servers.json` in standard MCP format and automatically discovered on startup.
+
+#### Emotional Filler Phrases (On-The-Go TTS)
+
+While a tool call or DuckDuckGo search runs in the background, Waffle immediately speaks conversational filler phrases with emotional inflection (e.g. *"Hmm, let me search that for you"*, *"Uhh, checking on that right now"*):
+- **Synthesized On The Go**: Generated directly through the active TTS pipeline (Pocket TTS or Kokoro) using the exact same configured voice or cloned voice model, ensuring audio consistency without any pre-saved clips.
+- **Context-Aware Selection**: Categorizes actions into `search`, `database`, `filesystem`, `time`, `fetch`, and `general` to pick the most accurate phrase for the invoked tool.
+- **De-duplication & Randomization**: Remembers recently used phrases to cycle through similar alternatives without repeating itself.
+- **Preview Phrases**:
+  ```bash
+  uv run python install_tool.py --preview-phrases # View phrases, emotion cues & categories
+  ```
+
 ### Tuning
+
 
 | Environment variable | Default | Purpose |
 |---|---|---|
@@ -147,6 +195,7 @@ Record 10-15 seconds from your mic or supply an audio file (`.wav`, `.mp3`). `./
 | `VOICECHAT_QUICK_FIRE_TIMEOUT` | `0.3` | Silence timeout when sentence ends with terminal punctuation |
 | `VOICECHAT_AEC_ENABLED` | `true` | Enable acoustic echo cancellation for microphone loopback |
 | `VOICECHAT_BARGE_IN_ENABLED` | `true` | Enable instant interruption on detected user speech |
+| `VOICECHAT_FILLER_PHRASES_ENABLED` | `true` | Synthesize natural emotional filler phrases on the go through the active TTS pipeline during tool calls |
 
 ## Project structure
 

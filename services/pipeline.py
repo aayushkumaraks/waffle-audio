@@ -27,6 +27,7 @@ from services.audio_processing.src import (
 from services.conversation.src import ConversationManager
 from services.llm.src import LLMListener, LLMProvider, LLMProviderConfig, LLMService
 from services.stt.src import AudioQueueFull, STTConfig, STTListener, STTService
+from services.tools import ToolManager
 from services.tts.src import TTSConfig, TTSService
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,7 @@ class UnifiedPipeline:
         aec_config: AECConfig | None = None,
         stt_config: STTConfig | None = None,
         llm_config: LLMProviderConfig | None = None,
+        tool_manager: ToolManager | None = None,
         tts_config: TTSConfig | None = None,
         enable_aec: bool = True,
         on_user_turn: Callable[[str], None] | None = None,
@@ -55,13 +57,18 @@ class UnifiedPipeline:
             else PassthroughEchoCanceller()
         )
         self.stt = STTService(stt_config)
-        self.provider = LLMProvider(llm_config or LLMProviderConfig())
+        self.provider = LLMProvider(llm_config or LLMProviderConfig(), tool_manager=tool_manager)
         self.llm = LLMService(self.provider)
         self.tts = TTSService(tts_config or TTSConfig())
+
         self.player = AudioPlayer()
 
         # Connect TTS to Player
         self.tts.add_listener(self.player)
+
+        # Connect PhraseManager to active TTS pipeline for on-the-go filler synthesis
+        self.provider.set_tts(self.tts)
+
 
         # Wire conversation manager
         self.manager = ConversationManager(

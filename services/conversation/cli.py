@@ -153,11 +153,13 @@ def main() -> None:
         stt = STTService()
         console.log("[green]✓[/green] STT Service initialized")
 
-        status.update(f"[bold cyan]Connecting to LLM ({OLLAMA_MODEL})...[/bold cyan]")
+        status.update(f"[bold cyan]Connecting to LLM ({OLLAMA_MODEL}) & loading MCP tools...[/bold cyan]")
         from services.llm.src import LLMProvider, LLMProviderConfig, LLMService
         provider = LLMProvider(LLMProviderConfig())
         llm = LLMService(provider)
-        console.log(f"[green]✓[/green] LLM Service initialized (model: {OLLAMA_MODEL})")
+        tool_count = len(provider.tool_manager.get_ollama_tools())
+        console.log(f"[green]✓[/green] LLM Service initialized (model: {OLLAMA_MODEL}, tools available: {tool_count})")
+
 
         status.update("[bold cyan]Loading Text-to-Speech engine...[/bold cyan]")
         from services.tts.src import TTSConfig, TTSService
@@ -170,7 +172,9 @@ def main() -> None:
         player.set_upstream_busy(lambda: getattr(tts, "is_busy", False))
         player.add_playback_monitor(aec.feed_reference)
         tts.add_listener(player)
-        console.log("[green]✓[/green] Audio Player initialized")
+        provider.set_tts(tts)
+        console.log("[green]✓[/green] Audio Player & Filler Phrases initialized")
+
 
         status.update("[bold cyan]Wiring Conversation Pipeline & Barge-In Controller...[/bold cyan]")
         from services.conversation.src import ConversationManager, ConversationUI

@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "time": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-time"
+      ]
+    },
+    "weather": {
+      "command": "uvx",
+      "args": [
+        "chuk-mcp-open-meteo"
+      ]
+    }
+  }
+}

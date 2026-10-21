@@ -50,6 +50,10 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
         self._user_fragments: list[str] = []
         self._llm_generated_text: str = ""
         self._is_generating: bool = False
+        self._active_tool: str | None = None
+        self._active_phrase: str | None = None
+
+
 
         # Latency tracking timestamps
         self._t_speech_start: float | None = None
@@ -211,8 +215,24 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
         with self._lock:
             now = time.perf_counter()
             self._is_generating = False
+            self._active_tool = None
             self._t_llm_done = now
             self._llm_generated_text = text.strip() or self._llm_generated_text.strip()
+
+    def on_tool_started(
+        self, tool_name: str, arguments: dict, phrase: str | None = None
+    ) -> None:
+        with self._lock:
+            self._active_tool = tool_name
+            self._active_phrase = phrase
+            self._status = "PROCESSING"
+
+    def on_tool_completed(self, tool_name: str, result: str) -> None:
+        with self._lock:
+            self._active_tool = None
+            self._active_phrase = None
+
+
 
     # ------------------------------------------------------------------
     # Audio Playback Listener callbacks
@@ -321,6 +341,8 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
             is_generating = self._is_generating
             latest_bm = self._latest_benchmark.copy() if self._latest_benchmark else None
             verbose = self._verbose
+            active_tool = self._active_tool
+            active_phrase = self._active_phrase
 
         layout = Layout()
         if verbose:
@@ -381,17 +403,26 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
                 title_align="right",
             )
         else:  # PROCESSING
+            if active_phrase:
+                subtext = f"[bold magenta]⚡ {active_phrase}[/]"
+            elif active_tool:
+                subtext = f"[bold magenta]⚡ {active_tool}[/]"
+            else:
+                subtext = "[bold yellow]Thinking & speaking[/]"
+
             status_panel = Panel(
                 Align.center(
                     Text.from_markup(
                         f"[bold black on dark_orange] {spin} PROCESSING [/]\n"
-                        "[bold yellow]Thinking & speaking[/]"
+                        f"{subtext}"
                     )
                 ),
                 border_style="bright_yellow",
                 title="[bold yellow]STATUS[/]",
                 title_align="right",
             )
+
+
 
         layout["status_box"].update(status_panel)
 
