@@ -81,4 +81,13 @@ For local execution, `UnifiedPipeline` (`services/pipeline.py`) eliminates netwo
 - Audio chunks are passed directly in memory as contiguous NumPy `float32` arrays.
 - For multi-process architectures where model isolation is desired, `SharedAudioBuffer` (`services/shared_memory.py`) provides zero-copy shared memory ring buffers backed by POSIX shared memory (`multiprocessing.shared_memory`).
 
+## Audio Hardware Routing & Device Selection
+
+Audio stream acquisition and playback honor user-selected audio device indices configured via environment variables or `.env`:
+
+- `AUDIO_INPUT_DEVICE`: Specifies the microphone device index (integer) or exact device name substring passed directly to `sounddevice.InputStream(device=...)`. When unset or `"default"`, uses the system default audio input device.
+- `AUDIO_OUTPUT_DEVICE`: Specifies the speaker/headphone device index or name passed to `sounddevice.OutputStream(device=...)` in `AudioPlayer`.
+- During onboarding, `setup.py` queries `sounddevice.query_devices()` to enumerate and present all detected input devices (e.g. PulseAudio `RDPSource` under WSLg or hardware USB microphones) with their respective PortAudio device indices.
+
+
 

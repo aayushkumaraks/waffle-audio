@@ -21,8 +21,23 @@ if %ERRORLEVEL% neq 0 (
 echo [2/3] Synchronizing Python environment...
 uv sync
 
+if not exist ".env" (
+    echo.
+    echo [Setup] Launching interactive configuration setup...
+    uv run python setup.py
+)
+
 setlocal enabledelayedexpansion
 set "VOICE_OPT="
+
+for %%A in (%*) do (
+    if "%%A"=="--trigger-mode" (
+        echo [Trigger Mode] Active: Assistant will only respond when 'Hey ASSISTANT_NAME' is spoken.
+    )
+    if "%%A"=="--setup" (
+        uv run python setup.py --force
+    )
+)
 
 REM Check if cloned voices exist
 if exist "cloned_voices\*.safetensors" (

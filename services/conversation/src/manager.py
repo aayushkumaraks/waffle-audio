@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import logging
-import re
 import queue
+import re
 import threading
+import time
 
 from typing import Callable
 
-from constants import SENTENCE_GATE_GAP_TIMEOUT, SENTENCE_GATE_QUICK_FIRE_TIMEOUT
+from constants import (
+    ASSISTANT_NAME,
+    SENTENCE_GATE_GAP_TIMEOUT,
+    SENTENCE_GATE_QUICK_FIRE_TIMEOUT,
+)
 from models import Message
 
 from services.stt.src import STTListener, STTService
@@ -48,6 +53,10 @@ class ConversationManager(LLMListener):
         quick_fire_timeout: float = SENTENCE_GATE_QUICK_FIRE_TIMEOUT,
         max_history_turns: int = 8,
         compactor: ContextCompactor | None = None,
+        trigger_mode: bool = False,
+        assistant_name: str = ASSISTANT_NAME,
+        on_user_turn_ignored: Callable[[str], None] | None = None,
+        follow_up_window_seconds: float = 15.0,
     ) -> None:
         self._stt = stt
         self._llm = llm
@@ -55,6 +64,11 @@ class ConversationManager(LLMListener):
         self._on_user_turn = on_user_turn
         self._max_history_turns = max_history_turns
         self._compactor = compactor or ContextCompactor()
+        self._trigger_mode = trigger_mode
+        self._assistant_name = assistant_name.strip() if assistant_name else "Waffle"
+        self._on_user_turn_ignored = on_user_turn_ignored
+        self._follow_up_window_seconds = follow_up_window_seconds
+        self._last_assistant_turn_time: float = 0.0
 
         self._stt_listener = _STTListenerAdapter(self)
 
@@ -147,6 +161,52 @@ class ConversationManager(LLMListener):
         self._gate.submit(text)
 
     @property
+    def trigger_mode(self) -> bool:
+        """Returns whether the assistant only processes utterances with the trigger word."""
+        return self._trigger_mode
+
+    @trigger_mode.setter
+    def trigger_mode(self, value: bool) -> None:
+        self._trigger_mode = bool(value)
+
+    @property
+    def assistant_name(self) -> str:
+        """Returns the assistant's persona name used for trigger word matching."""
+        return self._assistant_name
+
+    @assistant_name.setter
+    def assistant_name(self, value: str) -> None:
+        self._assistant_name = value.strip() if value else "Waffle"
+
+    def is_trigger_word_present(self, text: str) -> bool:
+        """Check if 'Hey <ASSISTANT_NAME>', an active follow-up, or a tool call is spoken."""
+        if not text:
+            return False
+
+        # 1. Explicit tool invocation directive (e.g. "tool call", "tool-call", "use tool")
+        if re.search(
+            r"\b(?:tool[\s_-]*calls?|use\s+(?:a\s+|the\s+)?tool|call\s+(?:a\s+|the\s+)?tool)\b",
+            text,
+            re.IGNORECASE,
+        ):
+            return True
+
+        # 2. Check if within active conversation follow-up grace window
+        if (
+            self._last_assistant_turn_time > 0
+            and (time.monotonic() - self._last_assistant_turn_time) <= self._follow_up_window_seconds
+        ):
+            return True
+
+        # 3. Check for wake phrase 'Hey <ASSISTANT_NAME>'
+        if not self._assistant_name:
+            return False
+        clean_name = self._assistant_name.strip()
+        escaped_name = re.sub(r"\s+", r"\\s+", re.escape(clean_name))
+        pattern = rf"\bhey\b[,\s\-\.!?:;]*{escaped_name}\b"
+        return bool(re.search(pattern, text, re.IGNORECASE))
+
+    @property
     def compactor(self) -> ContextCompactor:
         """Returns the active ContextCompactor instance."""
         return self._compactor
@@ -185,6 +245,19 @@ class ConversationManager(LLMListener):
 
     def _trigger_llm(self, text: str) -> None:
         """Called by SentenceGate once the utterance looks complete."""
+        if self._trigger_mode and not self.is_trigger_word_present(text):
+            logger.info(
+                "Trigger mode active: ignoring utterance without trigger word 'Hey %s': %s",
+                self._assistant_name,
+                text,
+            )
+            if self._on_user_turn_ignored is not None:
+                try:
+                    self._on_user_turn_ignored(text)
+                except Exception as exc:
+                    logger.warning("Error in on_user_turn_ignored callback: %s", exc)
+            return
+
         # Yield all resources to the active user turn by aborting background compaction
         self._compactor.abort()
 
@@ -274,6 +347,7 @@ class ConversationManager(LLMListener):
             )
         )
         self._prune_history()
+        self._last_assistant_turn_time = time.monotonic()
         self._trigger_compaction_if_needed()
 
         logger.debug(

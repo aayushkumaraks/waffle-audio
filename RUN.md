@@ -13,6 +13,9 @@ On Windows:
 run.bat
 ```
 
+> [!TIP]
+> On your first run, `./run.sh` automatically launches the interactive **Setup Wizard** (`setup.py`) to personalize your assistant and detect your microphone and Ollama setup. You can re-run the wizard anytime with `./run.sh --setup` or `uv run python setup.py --force`.
+
 Or start the CLI app directly with `uv`:
 
 ```bash
@@ -24,6 +27,9 @@ uv run python -m services.conversation.cli
 - **Real-Time Conversation**: Live speech transcription and streaming voice responses synchronized with audio playback.
 - **Instant Interruption (Barge-In)**: Interrupt Waffle at any point while it is speaking. Detection stops speaker playback in <50ms, aborts ongoing LLM inference, and purges TTS queues.
 - **Acoustic Echo Cancellation (AEC)**: Filters assistant speaker audio from the microphone so you can listen on loudspeakers without the assistant triggering its own VAD.
+- **Asynchronous Context Compactor**: A background worker periodically summarizes older conversation turns without competing with or pausing active turn streaming.
+- **Dynamic Intent-Gated Tools**: Heavy MCP tool schemas are omitted during standard chat, and dynamically injected only when natural tool keywords or search queries ("search", "find recent", "check the web", "weather") are detected.
+- **Trigger Mode (`--trigger-mode`)**: Only processes and responds when the trigger phrase `"Hey <ASSISTANT_NAME>"` is spoken (e.g. `"Hey Waffle, what's the weather?"`), discarding untriggered background conversation.
 - **Dynamic Auto-Scrolling**: Keeps dialogue panel anchored at the bottom as turns arrive, with an indicator for scrolled lines.
 - **Multi-Line Speech Accumulation**: Continuous user speech spanning multiple segments is joined into a single coherent prompt.
 - **ASCII Animations**: Dynamic header waveforms and processing spinners.
@@ -190,14 +196,21 @@ VOICECHAT_CORS_ALLOW_ORIGINS=http://localhost:8080,http://127.0.0.1:5500 uv run 
 | API host       | `constants.py` (`VOICECHAT_API_HOST`)        | 0.0.0.0              |
 | API port       | `constants.py` (`VOICECHAT_API_PORT`)        | 3000                 |
 | CORS origins   | `constants.py` (`VOICECHAT_CORS_ALLOW_ORIGINS`) | *                 |
-| Ollama URL     | `services/llm/src/llm_provider.py`           | http://172.19.96.1:11434 |
-| Ollama model   | `services/llm/src/llm_provider.py`           | qwen3.5:4b           |
-| TTS voice      | `services/tts/src/tts_service.py`            | af_sarah             |
-| TTS speed      | `services/tts/src/tts_service.py`            | 1.0                  |
-| STT language   | `services/stt/src/stt_service.py`            | en                   |
-| Silence gate   | `constants.py` (`VOICECHAT_GAP_TIMEOUT`, `VOICECHAT_QUICK_FIRE_TIMEOUT`) | 0.5 s gap, 0.25 s quick-fire |
-| AEC enabled    | `constants.py` (`VOICECHAT_AEC_ENABLED`)     | false                |
-| Barge-in       | `constants.py` (`VOICECHAT_BARGE_IN_ENABLED`)| false                |
+| Ollama URL     | `.env` / `constants.py` (`OLLAMA_BASE_URL`)  | http://localhost:11434 |
+| Ollama model   | `.env` / `constants.py` (`OLLAMA_MODEL`)     | qwen3.5:4b           |
+| TTS voice      | `.env` / `constants.py` (`VOICECHAT_TTS_VOICE`)| anna               |
+| User Name      | `.env` / `constants.py` (`USER_NAME`)        | (none / user set)    |
+| User Location  | `.env` / `constants.py` (`USER_LOCATION`)    | (none / user set)    |
+| User Timezone  | `.env` / `constants.py` (`USER_TIMEZONE`)    | (none / user set)    |
+| Assistant Name | `.env` / `constants.py` (`ASSISTANT_NAME`)    | Waffle               |
+| Audio Input    | `.env` / `constants.py` (`AUDIO_INPUT_DEVICE`)| default (system mic) |
+| Audio Output   | `.env` / `constants.py` (`AUDIO_OUTPUT_DEVICE`)| default             |
+| Silence gate   | `constants.py` (`VOICECHAT_GAP_TIMEOUT`, `VOICECHAT_QUICK_FIRE_TIMEOUT`) | 0.8 s gap, 0.3 s quick-fire |
+| AEC enabled    | `constants.py` (`VOICECHAT_AEC_ENABLED`)     | true                 |
+| Barge-in       | `constants.py` (`VOICECHAT_BARGE_IN_ENABLED`)| true                 |
+| Trigger Mode   | `.env` / `constants.py` (`VOICECHAT_TRIGGER_MODE`) | false (or `--trigger-mode`) |
+| Tool Calling   | `constants.py` (`VOICECHAT_TOOL_CALLING_ENABLED`) | true            |
+| Compactor      | `constants.py` (`VOICECHAT_COMPACTOR_ENABLED`) | true                |
 
 ---
 

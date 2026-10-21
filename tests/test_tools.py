@@ -168,6 +168,25 @@ class TestToolManager(unittest.TestCase):
                 self.assertIn("broken_tool' error: Connection refused", res)
                 self.assertIn("Fallback DuckDuckGo Search", res)
 
+    def test_fallback_to_duckduckgo_when_tool_returns_unhelpful_result(self) -> None:
+        """When an installed tool returns unknown code or error string without exception, fall back to DuckDuckGo."""
+        manager = ToolManager(config_path=self.config_path)
+        server_cfg = MCPServerConfig(name="weather", command="weather_cmd")
+        tool_def = MCPToolDefinition(
+            name="batch_interpret_weather_codes",
+            description="Interpret weather codes",
+            input_schema={"type": "object"},
+            server_name="weather",
+        )
+        manager._tools["batch_interpret_weather_codes"] = (server_cfg, tool_def)
+
+        unhelpful_response = '{"results": [{"code": 76, "description": "Unknown weather code: 76"}]}'
+        with patch.object(manager.mcp_client, "call_tool_sync", return_value=unhelpful_response):
+            with patch.object(manager.search, "search", return_value="Current weather in New Delhi is 28C") as mock_search:
+                res = manager.execute_tool("batch_interpret_weather_codes", {"weather_codes": "76"})
+                mock_search.assert_called_once()
+                self.assertEqual(res, "Current weather in New Delhi is 28C")
+
     def test_add_and_remove_server(self) -> None:
         manager = ToolManager(config_path=self.config_path)
 

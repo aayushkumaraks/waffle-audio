@@ -110,15 +110,41 @@ ollama serve
 
 ### WSL2 note
 
-The default `base_url` in `services/llm/src/llm_provider.py` points to the
-Windows host IP as seen from inside WSL2.
-
-If your Ollama server is running elsewhere, update
-`LLMProviderConfig.base_url`.
+If you run Ollama on your Windows host while running Waffle Audio inside WSL2, the setup script (`setup.py` or `./run.sh`) automatically tests connectivity and detects your Windows host gateway IP. You can also configure `OLLAMA_BASE_URL` in `.env`.
 
 ---
 
-## 4. TTS backend and voice cloning
+## 4. Initial Setup & Personalization Wizard
+
+Run the interactive setup wizard once before your first launch (or simply run `./run.sh`, which launches it automatically if `.env` does not exist):
+
+```bash
+uv run python setup.py
+```
+
+The wizard guides you through three quick configuration stages:
+1. **User Personalization** (no defaults):
+   - Your preferred name (`USER_NAME`)
+   - Your city or location (`USER_LOCATION`, e.g. `New Delhi`, `London`)
+   - Your timezone (`USER_TIMEZONE`, e.g. `Asia/Kolkata`, `America/New_York`)
+2. **Assistant & Audio Hardware** (smart defaults provided):
+   - Assistant name (`ASSISTANT_NAME`, default: `Waffle`)
+   - TTS voice (`VOICECHAT_TTS_VOICE`, default: `anna`, showing all cloned voices)
+   - Microphone input device index (`AUDIO_INPUT_DEVICE`, default: `default`, listing all detected sounddevice inputs)
+3. **LLM Runtime & External API Tokens** (defaults provided):
+   - Ollama base URL (`OLLAMA_BASE_URL`, default: `http://localhost:11434` or detected WSL host)
+   - Ollama model (`OLLAMA_MODEL`, default: `qwen3.5:4b`)
+   - GitHub personal access token (`GITHUB_PERSONAL_ACCESS_TOKEN`, default: none/empty)
+
+Your settings are written to `.env`. This file is git-ignored and safe for local credentials. You can copy [`.env.example`](.env.example) to `.env` to configure manually, or re-run setup anytime with:
+
+```bash
+uv run python setup.py --force
+```
+
+---
+
+## 5. TTS backend and voice cloning
 
 Pocket TTS is the default backend (`VOICECHAT_TTS_BACKEND=pocket`) and supports real-time voice cloning.
 Its cache is persisted at `voiceModels/pocket-tts-cache/`; override with `VOICECHAT_POCKET_TTS_CACHE_DIR` if needed.
@@ -139,7 +165,7 @@ voiceModels/
 
 ---
 
-## 5. Verify audio
+## 6. Verify audio
 
 Run:
 

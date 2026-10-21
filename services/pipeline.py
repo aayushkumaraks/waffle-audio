@@ -49,6 +49,8 @@ class UnifiedPipeline:
         tts_config: TTSConfig | None = None,
         enable_aec: bool = True,
         on_user_turn: Callable[[str], None] | None = None,
+        trigger_mode: bool = False,
+        assistant_name: str | None = None,
     ) -> None:
         self.vad = VADService(vad_config or VADConfig())
         self.echo_canceller: EchoCanceller = (
@@ -76,6 +78,8 @@ class UnifiedPipeline:
             llm=self.llm,
             tts=self.tts,
             on_user_turn=on_user_turn,
+            trigger_mode=trigger_mode,
+            assistant_name=assistant_name or "Waffle",
         )
 
         # Wire instant interruption / barge-in controller

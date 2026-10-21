@@ -79,6 +79,12 @@ def main() -> None:
         default=os.getenv("VOICECHAT_TTS_VOICE"),
         help="Voice to use for TTS (predefined name, cloned voice name from cloned_voices/, or path to .safetensors)",
     )
+    parser.add_argument(
+        "--trigger-mode",
+        action="store_true",
+        default=os.getenv("VOICECHAT_TRIGGER_MODE", "false").lower() in ("true", "1", "yes"),
+        help="Only process and respond when the trigger word 'Hey ASSISTANT_NAME' is spoken",
+    )
     args, _ = parser.parse_known_args()
 
     _setup_logging()
@@ -135,9 +141,11 @@ def main() -> None:
         Live = _Live
         from constants import (
             AEC_ENABLED,
+            ASSISTANT_NAME,
             AUDIO_INPUT_DEVICE,
             BARGE_IN_ENABLED,
             OLLAMA_MODEL,
+            TRIGGER_MODE,
         )
         console.log("[green]✓[/green] Core audio drivers loaded")
 
@@ -196,8 +204,27 @@ def main() -> None:
         README_TARGET_LLM_FULL = _LF
         README_TARGET_TTS_FIRST = _TF
 
-        ui = ConversationUI(verbose=args.verbose)
-        manager = ConversationManager(stt=stt, llm=llm, tts=tts, on_user_turn=ui.on_user_turn)
+        is_trigger_mode = bool(args.trigger_mode or TRIGGER_MODE)
+        if is_trigger_mode:
+            console.log(
+                f"[yellow]Trigger mode ACTIVE[/yellow]: Assistant will only respond when 'Hey {ASSISTANT_NAME}' is spoken"
+            )
+            logger.info("Trigger mode active (trigger word: 'Hey %s')", ASSISTANT_NAME)
+
+        ui = ConversationUI(
+            verbose=args.verbose,
+            trigger_mode=is_trigger_mode,
+            assistant_name=ASSISTANT_NAME,
+        )
+        manager = ConversationManager(
+            stt=stt,
+            llm=llm,
+            tts=tts,
+            on_user_turn=ui.on_user_turn,
+            trigger_mode=is_trigger_mode,
+            assistant_name=ASSISTANT_NAME,
+            on_user_turn_ignored=ui.on_user_turn_ignored,
+        )
         barge_in = BargeInController(
             player=player,
             manager=manager,

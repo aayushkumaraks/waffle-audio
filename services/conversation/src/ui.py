@@ -39,8 +39,15 @@ def _format_diff(observed: float, target: float) -> str:
 class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
     """Thread-safe UI controller and renderer for the terminal voice interface."""
 
-    def __init__(self, verbose: bool = False) -> None:
+    def __init__(
+        self,
+        verbose: bool = False,
+        trigger_mode: bool = False,
+        assistant_name: str = "Waffle",
+    ) -> None:
         self._verbose = verbose
+        self._trigger_mode = trigger_mode
+        self._assistant_name = assistant_name.strip() if assistant_name else "Waffle"
         self._lock = threading.Lock()
         self._status: StatusType = "READY"
         self._history: list[dict[str, str]] = []
@@ -172,6 +179,18 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
                 self._current_user = ""
                 self._current_assistant = ""
                 self._llm_generated_text = ""
+
+    def on_user_turn_ignored(self, text: str) -> None:
+        """Called when an utterance is ignored (e.g. trigger word missing in trigger mode)."""
+        with self._lock:
+            self._status = "READY"
+            self._is_generating = False
+            self._pending_user_turn = ""
+            self._user_fragments.clear()
+            self._current_user = ""
+            self._current_assistant = ""
+            self._t_speech_start = None
+            self._t_speech_end = None
 
     # ------------------------------------------------------------------
     # LLM Listener callbacks
@@ -343,6 +362,8 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
             verbose = self._verbose
             active_tool = self._active_tool
             active_phrase = self._active_phrase
+            trigger_mode = self._trigger_mode
+            assistant_name = self._assistant_name
 
         layout = Layout()
         if verbose:
@@ -373,17 +394,20 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
         title_text.append(" 🧇 WAFFLE AUDIO CLI ", style="bold bright_white on dark_blue")
         title_text.append(f"  {current_wave}\n", style="bold cyan")
         title_text.append(" Real-Time Voice Assistant • Local & Private", style="dim italic")
+        if trigger_mode:
+            title_text.append(f"  [TRIGGER: Hey {assistant_name}]", style="bold yellow")
         if verbose:
             title_text.append("  [VERBOSE TIMELINE ACTIVE]", style="bold magenta")
         layout["title"].update(Panel(title_text, border_style="blue", padding=(0, 1)))
 
         # --- Right Header: Status box (Pinned Top-Right Corner) ---
         if status == "READY":
+            ready_sub = f"Say 'Hey {assistant_name}'..." if trigger_mode else "Awaiting speech..."
             status_panel = Panel(
                 Align.center(
                     Text.from_markup(
                         "[bold bright_white on dark_green]   ● READY   [/]\n"
-                        "[dim green]Awaiting speech...[/dim green]"
+                        f"[dim green]{ready_sub}[/dim green]"
                     )
                 ),
                 border_style="bright_green",

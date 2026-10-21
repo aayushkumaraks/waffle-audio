@@ -182,6 +182,26 @@ class ToolManager:
                     )
             return res
 
+    def _is_unhelpful_or_error_result(self, result: str, name: str) -> bool:
+        """Check if an MCP tool result is an error message, empty, or unhelpful."""
+        if not result or not result.strip():
+            return True
+        r = result.strip().lower()
+        if r in ("{}", "[]", "null", "none"):
+            return True
+        # Check for error indicators
+        if "unknown weather code" in r:
+            return True
+        if '"iserror": true' in r or "'iserror': true" in r:
+            return True
+        if "error:" in r or "exception:" in r or "traceback (most recent call last)" in r:
+            return True
+        if "connection refused" in r or "timed out" in r or "failed to connect" in r:
+            return True
+        if "could not find" in r or "no data available" in r or "city not found" in r:
+            return True
+        return False
+
     def _build_search_query(self, name: str, args: dict[str, Any]) -> str:
         """Construct an effective search query from a function name and arguments."""
         # 1. Check for explicit search query keys
@@ -192,13 +212,23 @@ class ToolManager:
 
         # 2. Extract values from arguments, filtering out internal or empty values
         val_parts: list[str] = []
+        name_lower = name.lower()
         for k, v in args.items():
             if isinstance(v, (str, int, float, bool)) and str(v).strip():
-                val_parts.append(str(v).strip())
+                s = str(v).strip()
+                if "interpret" in name_lower and s.isdigit():
+                    continue
+                val_parts.append(s)
+
+        # If no arguments provided and it is a weather tool, fallback to USER_LOCATION
+        if not val_parts and "weather" in name_lower:
+            from constants import USER_LOCATION
+            if USER_LOCATION:
+                val_parts.append(USER_LOCATION)
 
         # 3. Clean up tool name into human-readable intent
         import re
-        clean_name = re.sub(r"^(get_|fetch_|check_|lookup_|search_|show_|read_)", "", name.lower())
+        clean_name = re.sub(r"^(get_|fetch_|check_|lookup_|search_|show_|read_|batch_)", "", name_lower)
         clean_name = clean_name.replace("_", " ").replace("-", " ").strip()
 
         if val_parts:
@@ -243,6 +273,16 @@ class ToolManager:
                     args["target_timezone"] = "Etc/UTC"
             try:
                 result = self.mcp_client.call_tool_sync(server_cfg, name, args)
+                if self._is_unhelpful_or_error_result(result, name):
+                    logger.warning(
+                        "MCP tool '%s' on server '%s' returned an unhelpful or error result: %s. Falling back to DuckDuckGo search.",
+                        name,
+                        server_cfg.name,
+                        result[:100],
+                    )
+                    query = self._build_search_query(name, args)
+                    fallback = self.search.search(str(query))
+                    return fallback
                 return result
             except Exception as exc:
                 logger.warning(
