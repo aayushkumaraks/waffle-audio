@@ -269,11 +269,19 @@ class ConversationManager(LLMListener):
         )
         self._prune_history()
 
+        logger.info(
+            "[CONVERSATION] Processing user turn (history len=%d, text len=%d): '%s'",
+            len(self._history),
+            len(text),
+            text,
+        )
+
         if self._on_user_turn is not None:
             try:
                 self._on_user_turn(text)
             except Exception as exc:
                 logger.warning("Error in on_user_turn callback: %s", exc)
+
 
         logger.debug(
             "Conversation history now contains %d message(s).",

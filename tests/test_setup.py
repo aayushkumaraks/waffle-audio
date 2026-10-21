@@ -109,6 +109,31 @@ class TestEnvLoadingAndPersonalization(unittest.TestCase):
             self.assertIn("location is Malibu, CA", prompt)
             self.assertIn("timezone is America/Los_Angeles", prompt)
 
+    def test_llm_provider_when_no_user_name_prohibits_taking_name(self) -> None:
+        """When no user name is provided, LLM must be explicitly forbidden from taking/inventing user name."""
+        with patch("services.llm.src.llm_provider.USER_NAME", ""):
+            prompt = LLMProvider._build_default_system_prompt()
+            self.assertIn("The user's name is not provided. Never assume, invent, or use any name to address or refer to the user.", prompt)
+            self.assertNotIn("speaking with", prompt)
+            self.assertIn("Never address the user by any name unless their name is explicitly provided", prompt)
+
+    def test_llm_provider_when_no_assistant_name_avoids_hardcoding(self) -> None:
+        """When no assistant name is provided in .env/config, assistant must not hardcode 'Waffle'."""
+        with patch("services.llm.src.llm_provider.ASSISTANT_NAME", ""):
+            prompt = LLMProvider._build_default_system_prompt()
+            self.assertIn("You are a helpful voice assistant. You speak in a natural", prompt)
+            self.assertNotIn("named", prompt)
+
+    def test_llm_provider_instance_config_overrides(self) -> None:
+        """LLMProviderConfig overrides environment variables dynamically."""
+        config = LLMProviderConfig(assistant_name="Friday", user_name="Bruce Wayne")
+        provider = LLMProvider(config)
+        req = provider._build_request([])
+        system_content = req["messages"][0]["content"]
+        self.assertIn("named Friday", system_content)
+        self.assertIn("speaking with Bruce Wayne", system_content)
+
 
 if __name__ == "__main__":
     unittest.main()
+

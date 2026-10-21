@@ -2,8 +2,10 @@ import json
 import logging
 import re
 import threading
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Callable, Sequence
 
 import httpx
@@ -19,6 +21,7 @@ from constants import (
     USER_LOCATION,
     USER_NAME,
     USER_TIMEZONE,
+    is_benchmark_enabled,
 )
 from models import Message
 from services.tools import PhraseManager, ToolManager
@@ -47,10 +50,20 @@ class LLMCallbacks(ABC):
         """Called when a tool execution is initiated."""
         pass
 
-    def on_tool_completed(self, tool_name: str, result: str) -> None:
+    def on_tool_completed(
+        self,
+        tool_name: str,
+        result: str,
+        duration: float = 0.0,
+        fallback: bool = False,
+        server: str = "mcp",
+    ) -> None:
         """Called when a tool execution has finished."""
         pass
 
+    def record_followup_llm(self, first_token_dur: float, full_dur: float) -> None:
+        """Called to record follow-up LLM stream timings after tool execution."""
+        pass
 
 
 @dataclass(slots=True)
@@ -60,6 +73,10 @@ class LLMProviderConfig:
     base_url: str = OLLAMA_BASE_URL
     model: str = OLLAMA_MODEL
     tools_enabled: bool = TOOLS_ENABLED
+    assistant_name: str | None = None
+    user_name: str | None = None
+    user_location: str | None = None
+    user_timezone: str | None = None
 
 
 class LLMProviderError(Exception):
@@ -68,19 +85,25 @@ class LLMProviderError(Exception):
 
 TOOL_RELATED_INTENT_PATTERN = re.compile(
     r"("
-    # 1. Search keywords: search, look up, browse the web, google, duckduckgo
-    r"\b(?:search|look\s*up|browse(?:\s+the\s+web)?|google|duckduckgo)\b|"
-    # 2. Find recent / latest / online / on the web / out
-    r"\bfind\s+(?:recent|latest|new|current|online|on\s+the\s+web|out)\b|"
-    # 3. Check the web / online / recent / latest / news / weather / time / date
-    r"\bcheck\s+(?:the\s+web|online|the\s+internet|recent|latest|news|weather|forecast|time|date|status|who|what|where|when|if|whether)\b|"
+    # 1. Search keywords: search, look up, look it up, browse the web, google, duckduckgo
+    r"\b(?:search|browse(?:\s+the\s+web)?|google|duckduckgo)\b|"
+    r"\blook\s*(?:(?:it|this|that|things?|details?|events?|news)\s+)?up\b|"
+    # 2. Find recent / latest / online / on the web / out / some / more
+    r"\bfind\s+(?:recent|latest|new|current|online|on\s+the\s+web|out|some|more)\b|"
+    # 3. Check keywords: check the web, check for that, check that out, check it, can you check
+    r"\bcheck\s+(?:for\s+)?(?:that|it|this|out|into|the\s+web|online|the\s+internet|recent|latest|news|weather|forecast|time|date|status|who|what|where|when|if|whether)\b|"
+    r"\bcheck\s+(?:it|that|this)\s*out\b|"
+    r"\b(?:can\s+you\s+|could\s+you\s+|let'?s\s+|why\s+don'?t\s+we\s+)?check\b|"
     # 4. Explicit tool directives
     r"\b(?:tool[\s_-]*calls?|use\s+(?:a\s+|the\s+)?tool|call\s+(?:a\s+|the\s+)?tool)\b|"
-    # 5. Real-time / dynamic information: weather, news, current time/date
-    r"\b(?:weather|forecast)\b|"
-    r"\b(?:latest|breaking|recent)\s+news\b|"
+    # 5. References to previous requests
+    r"\b(?:as\s+i\s+asked|i\s+asked\s+you|asked\s+you\s+to\s+do|previously\s+asked|do\s+that|do\s+it)\b|"
+    # 6. Real-time / dynamic information: weather, news, headlines, current time/date
+    r"\b(?:weather|forecast|headlines)\b|"
+    r"\b(?:latest|breaking|recent|current|local|today'?s)?\s*news\b|"
+    r"\bwhat(?:'s|\s+is)\s+happening\b|"
     r"\b(?:what\s+time\s+is\s+it|current\s+time|today'?s\s+date|current\s+date|what\s+is\s+today'?s\s+date)\b|"
-    # 6. Questions asking for real-time/current facts
+    # 7. Questions asking for real-time/current facts
     r"\b(?:who\s+is|what\s+is|who\s+are)\b.*\b(?:right\s+now|currently|at\s+present)\b"
     r")",
     re.IGNORECASE,
@@ -199,33 +222,73 @@ class LLMProvider:
         """Register a callback (e.g. tts.speak) for on-the-go filler phrase synthesis."""
         self._phrase_manager.set_speak_callback(callback)
 
+    def _guess_tool_intent(self, messages: Sequence[Message]) -> bool:
+        """Estimate whether the user's turn has a probability of requiring tool calling.
+
+        Uses regex heuristics on the user request, checks installed MCP/local tool names,
+        and inspects conversational context for follow-up lookups or confirmations.
+        """
+        last_user_msg = next((m for m in reversed(messages) if m.role == "user"), None)
+        if not last_user_msg or not last_user_msg.content:
+            return False
+
+        # 1. Direct regex & installed tool name match on user text
+        if has_tool_intent(
+            last_user_msg.content,
+            tool_names=self._tool_manager.installed_tool_names,
+        ):
+            return True
+
+        # 2. Conversational context: check if the user is following up on a search/lookup context
+        if len(messages) >= 2:
+            prev_asst_msg = next(
+                (m for m in reversed(messages[:-1]) if m.role == "assistant"), None
+            )
+            if prev_asst_msg and prev_asst_msg.content:
+                asst_lower = prev_asst_msg.content.lower()
+                search_context_prompts = (
+                    "search", "searching", "look up", "looking up", "look this up", "look that up",
+                    "check", "checking", "find something", "happening closer to today", "uplifting instead",
+                    "give me a moment", "let me see", "shall i find", "would you like to hear"
+                )
+                user_lower = last_user_msg.content.lower().strip().rstrip(".!?")
+                followup_affirmations = (
+                    "yes", "yeah", "sure", "ok", "okay", "please", "why not", "why don't we",
+                    "go ahead", "do it", "and", "and...", "what about", "how about", "tell me",
+                    "can you", "could you", "do that", "anything else", "more", "look it up",
+                    "check for that"
+                )
+                if any(p in asst_lower for p in search_context_prompts) and (
+                    any(user_lower.startswith(f) or user_lower == f for f in followup_affirmations)
+                    or len(user_lower.split()) <= 4
+                ):
+                    return True
+
+        return False
+
     def generate(
         self,
         messages: Sequence[Message],
         callbacks: LLMCallbacks,
     ) -> None:
-        """Generate a streamed response. Tools are only sent if the user specifically requested 'Tool call'."""
+        """Generate a streamed response.
+
+        The regex is used to guess if the user's request has a probability of requiring tools.
+        When so, tool context is provided to the LLM to let it decide whether to call tools.
+        If the LLM decides not to call a tool, its conversational reply is accepted as-is.
+        """
         self._abort_event.clear()
 
-        last_user_msg = next((m for m in reversed(messages) if m.role == "user"), None)
-        tool_call_requested = (
-            has_tool_call_keyword(
-                last_user_msg.content,
-                tool_names=self._tool_manager.installed_tool_names,
-            )
-            if last_user_msg
-            else False
-        )
-
+        maybe_requires_tools = self._guess_tool_intent(messages)
         tools = (
             self._tool_manager.get_ollama_tools()
-            if (self._config.tools_enabled and tool_call_requested)
+            if (self._config.tools_enabled and maybe_requires_tools)
             else []
         )
         sys_prompt = (
-            self._build_tool_system_prompt()
-            if tool_call_requested
-            else self._build_default_system_prompt()
+            self._build_tool_system_prompt(**self._get_persona_kwargs())
+            if maybe_requires_tools
+            else self._build_default_system_prompt(**self._get_persona_kwargs())
         )
         payload = self._build_request(messages, tools=tools, system_prompt=sys_prompt)
 
@@ -233,22 +296,29 @@ class LLMProvider:
             tool_calls, initial_content = self._stream_or_collect_tools(payload, callbacks)
 
             # Check if text contained inline tool calls if native tool_calls was empty
-            if tool_call_requested and not tool_calls and initial_content:
+            if not tool_calls and initial_content:
                 parsed_calls = self._detect_text_tool_calls(initial_content)
                 if parsed_calls:
                     tool_calls = parsed_calls
 
-            # If tool calls were requested, execute them and generate final answer
+            # If the LLM decided to invoke tools, execute them and stream synthesized reply
             if tool_calls and not self._abort_event.is_set():
-                logger.info("Processing %d tool call(s)...", len(tool_calls))
+                logger.info("LLM decided to call %d tool(s)...", len(tool_calls))
                 self._execute_tools_and_stream_reply(
                     messages=messages,
                     tool_calls=tool_calls,
                     callbacks=callbacks,
                 )
             elif not tool_calls and not self._abort_event.is_set():
-                # Only fallback to search if the user explicitly requested a tool call
-                if tool_call_requested and self._should_fallback_to_ddg_search(messages, initial_content):
+                # If tool context was provided and LLM chose not to invoke tools: "If not then good" -
+                # the LLM's conversational reply has already been streamed.
+                # Only if tools were omitted due to no tool intent guess AND the model explicitly refused
+                # citing lack of real-time information do we invoke fallback search.
+                if (
+                    self._config.tools_enabled
+                    and not payload.get("tools")
+                    and self._should_fallback_to_ddg_search(messages, initial_content)
+                ):
                     logger.info("Model indicated lack of real-time info; invoking DuckDuckGo fallback search.")
                     last_user_query = messages[-1].content if messages else ""
                     self._execute_tools_and_stream_reply(
@@ -283,6 +353,8 @@ class LLMProvider:
         generation_started = False
         has_tools_config = bool(payload.get("tools"))
         buffer_threshold = 80 if has_tools_config else 0
+        t_start = time.perf_counter()
+        t_first_tok: float | None = None
 
         with self._client.stream("POST", "/api/chat", json=payload) as response:
             response.raise_for_status()
@@ -320,6 +392,7 @@ class LLMProvider:
                     # Only stream to speech if no tool calls have appeared and buffer threshold is met
                     if not tool_calls and len(collected_content) >= buffer_threshold:
                         if not generation_started:
+                            t_first_tok = time.perf_counter()
                             callbacks.on_generation_started()
                             generation_started = True
                         callbacks.on_generation_updated(collected_content)
@@ -327,11 +400,29 @@ class LLMProvider:
             # If no tool calls occurred, flush any unstreamed content and complete turn
             if not tool_calls and not self._abort_event.is_set():
                 if not generation_started and collected_content.strip():
+                    t_first_tok = time.perf_counter()
                     callbacks.on_generation_started()
                     generation_started = True
                     callbacks.on_generation_updated(collected_content)
                 if generation_started:
                     callbacks.on_generation_completed(collected_content)
+
+        if is_benchmark_enabled():
+            elapsed = time.perf_counter() - t_start
+            ttft = (t_first_tok - t_start) if t_first_tok else elapsed
+            if tool_calls:
+                logger.info(
+                    "[LLM BENCHMARK] Model emitted %d tool call(s) in %.3fs (decision latency)",
+                    len(tool_calls),
+                    elapsed,
+                )
+            else:
+                logger.info(
+                    "[LLM BENCHMARK] Direct LLM generation completed in %.3fs (TTFT: %.3fs, len=%d chars)",
+                    elapsed,
+                    ttft,
+                    len(collected_content),
+                )
 
         return tool_calls, collected_content
 
@@ -370,9 +461,25 @@ class LLMProvider:
                 callbacks.on_tool_started(name, args)
 
             # ToolManager executes the tool, or falls back to DuckDuckGo search
+            t_exec_start = time.perf_counter()
             result_str = self._tool_manager.execute_tool(name, args)
-            callbacks.on_tool_completed(name, result_str)
+            t_exec_dur = time.perf_counter() - t_exec_start
 
+            exec_info = getattr(self._tool_manager, "last_execution_info", {})
+            actual_dur = exec_info.get("duration", t_exec_dur)
+            is_fallback = exec_info.get("fallback", False)
+            server_name = exec_info.get("server", "mcp")
+
+            try:
+                callbacks.on_tool_completed(
+                    name,
+                    result_str,
+                    duration=actual_dur,
+                    fallback=is_fallback,
+                    server=server_name,
+                )
+            except TypeError:
+                callbacks.on_tool_completed(name, result_str)
 
             tool_results.append(
                 {
@@ -385,20 +492,13 @@ class LLMProvider:
             return
 
         # Prepare follow-up messages including tool context
-        # Formulate a clear prompt with tool results for the assistant to speak
-        tool_context_lines = ["Tool Execution Results:"]
-        for res in tool_results:
-            tool_context_lines.append(f"[{res['name']} Output]:\n{res['result']}")
-        tool_context = "\n\n".join(tool_context_lines)
-
         sliding_messages = messages[-14:] if len(messages) > 14 else messages
         conversation_context = [
             {"role": m.role if m.role in {"user", "assistant"} else "user", "content": m.content}
             for m in sliding_messages
         ]
 
-        followup_sys_prompt = self._build_followup_system_prompt()
-        # Use native Ollama tool execution schema: assistant tool_calls + role: tool results
+        followup_sys_prompt = self._build_followup_system_prompt(**self._get_persona_kwargs())
         followup_messages = [
             {"role": "system", "content": followup_sys_prompt},
             *conversation_context,
@@ -429,6 +529,9 @@ class LLMProvider:
         }
 
         # Stream the final answer directly to speech callbacks
+        t_followup_start = time.perf_counter()
+        t_followup_first_tok: float | None = None
+
         req = self._client.build_request("POST", "/api/chat", json=payload)
         response = self._client.send(req, stream=True)
         if response.status_code != 200:
@@ -475,16 +578,31 @@ class LLMProvider:
                     continue
 
                 if not generation_started:
+                    t_followup_first_tok = time.perf_counter()
                     callbacks.on_generation_started()
                     generation_started = True
 
                 generated_text += content
                 callbacks.on_generation_updated(generated_text)
 
+            t_followup_end = time.perf_counter()
             if generation_started and not self._abort_event.is_set():
+                if is_benchmark_enabled():
+                    logger.info(
+                        "[LLM BENCHMARK] Tool follow-up LLM stream completed in %.3fs (TTFT: %.3fs, len=%d chars)",
+                        fu_full_dur,
+                        fu_first_tok_dur,
+                        len(generated_text),
+                    )
+                    if hasattr(callbacks, "record_followup_llm"):
+                        try:
+                            callbacks.record_followup_llm(fu_first_tok_dur, fu_full_dur)
+                        except Exception:
+                            pass
                 callbacks.on_generation_completed(generated_text)
         finally:
             response.close()
+
 
     def _detect_text_tool_calls(self, text: str) -> list[dict[str, Any]]:
         """Extract tool calls if the model output tool call syntax as raw text."""
@@ -558,118 +676,159 @@ class LLMProvider:
             "do not have access to real-time",
             "cannot browse the internet",
             "can't browse the internet",
-            "don't have real-time",
-            "do not have real-time",
+            "no access to current",
+            "no access to real-time",
+            "cannot access real-time",
+            "can't access real-time",
             "my knowledge cutoff",
-            "i don't have internet access",
-            "i cannot provide current",
-            "as an ai, i cannot",
+            "as of my knowledge cutoff",
+            "as an ai, i don't have access to live",
+            "as an ai, i do not have access to live",
+            "as an ai, i cannot provide real-time",
+            "do not have live information",
+            "don't have live information",
+            "unable to browse",
         ]
         return any(phrase in asst for phrase in refusal_phrases)
 
+    def _get_persona_kwargs(self) -> dict[str, str | None]:
+        return {
+            "assistant_name": self._config.assistant_name if self._config.assistant_name is not None else ASSISTANT_NAME,
+            "user_name": self._config.user_name if self._config.user_name is not None else USER_NAME,
+            "user_location": self._config.user_location if self._config.user_location is not None else USER_LOCATION,
+            "user_timezone": self._config.user_timezone if self._config.user_timezone is not None else USER_TIMEZONE,
+        }
+
+    _VOICE_RULES = (
+        "SPEECH RULES (STRICT):\n"
+        "Your final responses are read aloud by a text-to-speech engine (Kokoro/Pocket TTS), so strictly adhere to these speech rules:\n"
+        "1. Reply in 1 to 3 short, spoken sentences only.\n"
+        "2. Output plain spoken English words only. NEVER output markdown formatting (no bold, asterisks, bullet points, headers, or tables), emojis, URLs, or code blocks.\n"
+        "3. NEVER include asterisked or bracketed actions or expressive tags (e.g. do NOT write *laughs*, *smiles*, [sighs], or *chuckles*).\n"
+        "4. Spell out numbers, measurements, and symbols in full words (e.g., 'three kilometers' not '3km', 'percent' not '%').\n"
+        "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes.\n"
+        "6. Never address the user by any name unless their name is explicitly provided in the persona instructions above."
+    )
+
     @classmethod
-    def _build_persona_prefix(cls) -> str:
-        name = ASSISTANT_NAME or "Waffle"
-        parts = [
-            f"You are a helpful voice assistant named {name}. You speak in a natural, calm, and friendly conversational tone."
-        ]
-        if USER_NAME:
-            parts.append(f"You are speaking with {USER_NAME}.")
-        if USER_LOCATION:
-            parts.append(f"The user's current location is {USER_LOCATION}.")
-        if USER_TIMEZONE:
-            parts.append(f"The user's timezone is {USER_TIMEZONE}.")
+    def _build_persona_prefix(
+        cls,
+        assistant_name: str | None = None,
+        user_name: str | None = None,
+        user_location: str | None = None,
+        user_timezone: str | None = None,
+    ) -> str:
+        asst_name = assistant_name if assistant_name is not None else ASSISTANT_NAME
+        u_name = user_name if user_name is not None else USER_NAME
+        u_loc = user_location if user_location is not None else USER_LOCATION
+        u_tz = user_timezone if user_timezone is not None else USER_TIMEZONE
+
+        parts = []
+        if asst_name and asst_name.strip():
+            parts.append(
+                f"You are a helpful voice assistant named {asst_name.strip()}. You speak in a natural, calm, and friendly conversational tone."
+            )
+        else:
+            parts.append(
+                "You are a helpful voice assistant. You speak in a natural, calm, and friendly conversational tone."
+            )
+
+        if u_name and u_name.strip():
+            parts.append(f"You are speaking with {u_name.strip()}.")
+        else:
+            parts.append(
+                "The user's name is not provided. Never assume, invent, or use any name to address or refer to the user."
+            )
+
+        if u_loc and u_loc.strip():
+            parts.append(f"The user's current location is {u_loc.strip()}.")
+        if u_tz and u_tz.strip():
+            parts.append(f"The user's timezone is {u_tz.strip()}.")
+
+        now = datetime.now()
+        if u_tz and u_tz.strip():
+            try:
+                from zoneinfo import ZoneInfo
+                now = datetime.now(ZoneInfo(u_tz.strip()))
+            except Exception:
+                pass
+        parts.append(f"Current date and time: {now.strftime('%A, %B %d, %Y, %I:%M %p')}.")
         return " ".join(parts)
 
     @classmethod
-    def _build_default_system_prompt(cls) -> str:
+    def _build_default_system_prompt(
+        cls,
+        assistant_name: str | None = None,
+        user_name: str | None = None,
+        user_location: str | None = None,
+        user_timezone: str | None = None,
+    ) -> str:
+        prefix = cls._build_persona_prefix(
+            assistant_name=assistant_name,
+            user_name=user_name,
+            user_location=user_location,
+            user_timezone=user_timezone,
+        )
         return (
-            f"{cls._build_persona_prefix()}\n\n"
-            "SPEECH RULES (STRICT):\n"
-            "Your final responses are read aloud by a text-to-speech engine (Kokoro/Pocket TTS), so strictly adhere to these speech rules:\n"
-            "1. Reply in 2-3 short, spoken sentences only.\n"
-            "2. Output plain spoken English words only. NEVER output markdown tables, bullet points, headers, emojis, URLs, or code blocks.\n"
-            "3. NEVER include asterisked or bracketed actions or expressive tags (e.g. do NOT write *laughs*, *smiles*, [sighs], or *chuckles*).\n"
-            "4. Spell out numbers, measurements, and symbols in full words (e.g., 'three kilometers' not '3km', 'percent' not '%').\n"
-            "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes."
+            f"{prefix}\n\n"
+            "Be directly helpful, concise, and engaging in your spoken answers.\n\n"
+            f"{cls._VOICE_RULES}"
         )
 
     @classmethod
-    def _build_tool_system_prompt(cls) -> str:
+    def _build_tool_system_prompt(
+        cls,
+        assistant_name: str | None = None,
+        user_name: str | None = None,
+        user_location: str | None = None,
+        user_timezone: str | None = None,
+    ) -> str:
+        prefix = cls._build_persona_prefix(
+            assistant_name=assistant_name,
+            user_name=user_name,
+            user_location=user_location,
+            user_timezone=user_timezone,
+        )
         return (
-            f"{cls._build_persona_prefix()}\n\n"
+            f"{prefix}\n\n"
             "TOOL CALLING POLICY (MANDATORY):\n"
-            "You have access to tools. Your internal pretraining memory is strictly historical and in the past. You do NOT have access to current real-world facts from memory.\n"
-            "Whenever the user asks a question:\n"
-            "- If an installed tool matches the function (for example, get_current_time for date/time/day/year, or filesystem/database tools), you MUST call that tool.\n"
-            "- If no installed tool matches the function or you need external facts, news, weather, current officeholders, or web details, you MUST call duckduckgo_search.\n"
-            "- NEVER guess or answer real-time facts, dates, time, or current affairs from internal memory. Always call the appropriate tool.\n\n"
-            "SPEECH RULES (STRICT):\n"
-            "Your final responses are read aloud by a text-to-speech engine (Kokoro/Pocket TTS), so strictly adhere to these speech rules:\n"
-            "1. Reply in 2-3 short, spoken sentences only.\n"
-            "2. Output plain spoken English words only. NEVER output markdown tables, bullet points, headers, emojis, URLs, or code blocks.\n"
-            "3. NEVER include asterisked or bracketed actions or expressive tags (e.g. do NOT write *laughs*, *smiles*, [sighs], or *chuckles*).\n"
-            "4. Spell out numbers, measurements, and symbols in full words (e.g., 'three kilometers' not '3km', 'percent' not '%').\n"
-            "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes."
+            "You have access to live tools, including DuckDuckGo search (duckduckgo_search) and MCP tools.\n"
+            "Whenever the user asks for current news, weather, real-time facts, web search, time, dates, or actions handled by tools:\n"
+            "- Proactively invoke the appropriate tool IMMEDIATELY in this turn instead of answering from pretraining memory or guessing.\n"
+            "- For web searches, latest news, weather, or current events, invoke duckduckgo_search.\n"
+            "- If an installed MCP tool matches the function, invoke that tool.\n"
+            "- If the user's message does not require live information or external tools, reply directly with conversational speech without invoking any tools.\n"
+            "- NEVER emit conversational text saying you are searching, looking up, checking updates, or asking for time (e.g. do NOT say 'I am searching', 'looking that up', 'checking updates', 'please give me a moment', or 'I will be with you in a moment'). You cannot search in the background. If you need information, you MUST execute the tool call right now.\n"
+            "- Formulate complete, standalone search queries: if the user refers to previous context or pronouns (e.g., 'search it', 'look that up', 'check for that'), resolve the topic into a complete standalone search query (e.g. query='positive news events New Delhi').\n"
+            "- NEVER say you cannot browse the internet, do not have real-time information, or cite a knowledge cutoff date. Always execute the appropriate tool to look up the answer.\n\n"
+            f"{cls._VOICE_RULES}"
         )
 
     @classmethod
-    def _build_followup_system_prompt(cls) -> str:
+    def _build_followup_system_prompt(
+        cls,
+        assistant_name: str | None = None,
+        user_name: str | None = None,
+        user_location: str | None = None,
+        user_timezone: str | None = None,
+    ) -> str:
+        prefix = cls._build_persona_prefix(
+            assistant_name=assistant_name,
+            user_name=user_name,
+            user_location=user_location,
+            user_timezone=user_timezone,
+        )
         return (
-            f"{cls._build_persona_prefix()}\n\n"
+            f"{prefix}\n\n"
             "You have executed tools and retrieved real-time information to answer the user's inquiry.\n"
-            "Directly and conversationally answer the user's question using the provided tool results.\n\n"
-            "SPEECH RULES (STRICT):\n"
-            "Your final responses are read aloud by a text-to-speech engine (Kokoro/Pocket TTS), so strictly adhere to these speech rules:\n"
-            "1. Reply in 2-3 short, spoken sentences only.\n"
-            "2. Output plain spoken English words only. NEVER output markdown tables, bullet points, headers, emojis, URLs, or code blocks.\n"
-            "3. NEVER include asterisked or bracketed actions or expressive tags (e.g. do NOT write *laughs*, *smiles*, [sighs], or *chuckles*).\n"
-            "4. Spell out numbers, measurements, and symbols in full words (e.g., 'twenty-four degrees Celsius', 'percent' not '%').\n"
-            "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes."
+            "Synthesize the tool results into a clear, direct, and conversational spoken answer to the user's question.\n\n"
+            f"{cls._VOICE_RULES}"
         )
 
-    _DEFAULT_SYSTEM_PROMPT = (
-        "You are a helpful voice assistant named Waffle. You speak in a natural, calm, and friendly conversational tone.\n\n"
-        "SPEECH RULES (STRICT):\n"
-        "Your final responses are read aloud by a text-to-speech engine (Kokoro/Pocket TTS), so strictly adhere to these speech rules:\n"
-        "1. Reply in 2-3 short, spoken sentences only.\n"
-        "2. Output plain spoken English words only. NEVER output markdown tables, bullet points, headers, emojis, URLs, or code blocks.\n"
-        "3. NEVER include asterisked or bracketed actions or expressive tags (e.g. do NOT write *laughs*, *smiles*, [sighs], or *chuckles*).\n"
-        "4. Spell out numbers, measurements, and symbols in full words (e.g., 'three kilometers' not '3km', 'percent' not '%').\n"
-        "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes."
-    )
-
-    _TOOL_SYSTEM_PROMPT = (
-        "You are a helpful voice assistant named Waffle. You speak in a natural, calm, and friendly conversational tone.\n\n"
-        "TOOL CALLING POLICY (MANDATORY):\n"
-        "You have access to tools. Your internal pretraining memory is strictly historical and in the past. You do NOT have access to current real-world facts from memory.\n"
-        "Whenever the user asks a question:\n"
-        "- If an installed tool matches the function (for example, get_current_time for date/time/day/year, or filesystem/database tools), you MUST call that tool.\n"
-        "- If no installed tool matches the function or you need external facts, news, weather, current officeholders, or web details, you MUST call duckduckgo_search.\n"
-        "- NEVER guess or answer real-time facts, dates, time, or current affairs from internal memory. Always call the appropriate tool.\n\n"
-        "SPEECH RULES (STRICT):\n"
-        "Your final responses are read aloud by a text-to-speech engine (Kokoro/Pocket TTS), so strictly adhere to these speech rules:\n"
-        "1. Reply in 2-3 short, spoken sentences only.\n"
-        "2. Output plain spoken English words only. NEVER output markdown tables, bullet points, headers, emojis, URLs, or code blocks.\n"
-        "3. NEVER include asterisked or bracketed actions or expressive tags (e.g. do NOT write *laughs*, *smiles*, [sighs], or *chuckles*).\n"
-        "4. Spell out numbers, measurements, and symbols in full words (e.g., 'three kilometers' not '3km', 'percent' not '%').\n"
-        "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes."
-    )
-
-    _SYSTEM_PROMPT = _DEFAULT_SYSTEM_PROMPT
-
-    _FOLLOWUP_SYSTEM_PROMPT = (
-        "You are a helpful voice assistant named Waffle. You speak in a natural, calm, and friendly conversational tone.\n\n"
-        "You have executed tools and retrieved real-time information to answer the user's inquiry.\n"
-        "Directly and conversationally answer the user's question using the provided tool results.\n\n"
-        "SPEECH RULES (STRICT):\n"
-        "Your final responses are read aloud by a text-to-speech engine (Kokoro/Pocket TTS), so strictly adhere to these speech rules:\n"
-        "1. Reply in 2-3 short, spoken sentences only.\n"
-        "2. Output plain spoken English words only. NEVER output markdown tables, bullet points, headers, emojis, URLs, or code blocks.\n"
-        "3. NEVER include asterisked or bracketed actions or expressive tags (e.g. do NOT write *laughs*, *smiles*, [sighs], or *chuckles*).\n"
-        "4. Spell out numbers, measurements, and symbols in full words (e.g., 'twenty-four degrees Celsius', 'percent' not '%').\n"
-        "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes."
-    )
+    _SYSTEM_PROMPT = _VOICE_RULES
+    _DEFAULT_SYSTEM_PROMPT = _SYSTEM_PROMPT
+    _TOOL_SYSTEM_PROMPT = _SYSTEM_PROMPT
+    _FOLLOWUP_SYSTEM_PROMPT = _SYSTEM_PROMPT
 
     def _build_request(
         self,
@@ -680,7 +839,10 @@ class LLMProvider:
         """Build an Ollama chat request with sliding window guard and optional tools."""
         sliding_messages = messages[-16:] if len(messages) > 16 else messages
 
-        system_message = {"role": "system", "content": system_prompt or self._build_default_system_prompt()}
+        system_message = {
+            "role": "system",
+            "content": system_prompt or self._build_default_system_prompt(**self._get_persona_kwargs()),
+        }
 
         request_payload: dict[str, Any] = {
             "model": self._config.model,

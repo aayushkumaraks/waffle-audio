@@ -16,7 +16,11 @@ def _load_env_file(filepath: Path | str = ".env") -> None:
     """
     env_path = Path(filepath)
     if not env_path.is_file():
-        return
+        fallback_path = Path(__file__).resolve().parent / filepath
+        if fallback_path.is_file():
+            env_path = fallback_path
+        else:
+            return
     try:
         with env_path.open("r", encoding="utf-8") as f:
             for line in f:
@@ -59,7 +63,7 @@ def _int_from_env(name: str, default: int) -> int:
 USER_NAME: str = os.getenv("USER_NAME", "").strip()
 USER_LOCATION: str = os.getenv("USER_LOCATION", "").strip()
 USER_TIMEZONE: str = os.getenv("USER_TIMEZONE", "").strip()
-ASSISTANT_NAME: str = os.getenv("ASSISTANT_NAME", "Waffle").strip() or "Waffle"
+ASSISTANT_NAME: str = os.getenv("ASSISTANT_NAME", "Waffle").strip()
 TRIGGER_MODE: bool = os.getenv("VOICECHAT_TRIGGER_MODE", "false").lower() in ("true", "1", "yes")
 
 # ---------------------------------------------------------------------------
@@ -241,3 +245,25 @@ API_CORS_ALLOW_ORIGINS: str = os.getenv(
     "http://localhost:3000,http://127.0.0.1:3000,"
     "http://localhost:8000,http://127.0.0.1:8000",
 )
+
+# ---------------------------------------------------------------------------
+# Benchmarking & Performance Profiling
+# ---------------------------------------------------------------------------
+
+_BENCHMARK_FLAG: bool = os.getenv("BENCHMARK_ENABLED", "false").lower() in ("true", "1", "yes")
+
+
+def is_benchmark_enabled() -> bool:
+    """Return True if performance benchmarking and latency logging is enabled."""
+    return _BENCHMARK_FLAG
+
+
+def set_benchmark_enabled(enabled: bool) -> None:
+    """Dynamically enable or disable performance benchmarking across the process."""
+    global _BENCHMARK_FLAG, BENCHMARK_ENABLED
+    _BENCHMARK_FLAG = bool(enabled)
+    BENCHMARK_ENABLED = _BENCHMARK_FLAG
+
+
+BENCHMARK_ENABLED: bool = _BENCHMARK_FLAG
+

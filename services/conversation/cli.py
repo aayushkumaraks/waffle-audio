@@ -14,33 +14,11 @@ from rich.console import Console
 os.environ.setdefault("ORT_LOGGING_LEVEL", "3")
 
 
-def _setup_logging() -> None:
-    """Redirect application logs to a file so the terminal UI stays completely clean."""
-    os.makedirs("logs", exist_ok=True)
-    file_handler = logging.FileHandler("logs/voicechat.log", encoding="utf-8")
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(
-        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    )
+def _setup_logging(benchmark_enabled: bool | None = None) -> None:
+    """Redirect application and benchmark logs to logs/ directory with immediate flushing."""
+    from services.logging_config import setup_app_logging
+    setup_app_logging(benchmark_enabled=benchmark_enabled)
 
-    root = logging.getLogger()
-    root.setLevel(logging.INFO)
-    # Remove any existing console/stream handlers
-    for handler in list(root.handlers):
-        root.removeHandler(handler)
-    root.addHandler(file_handler)
-
-    # Silence verbose third-party loggers from console output
-    for name in [
-        "httpx",
-        "httpcore",
-        "onnxruntime",
-        "moonshine_voice",
-        "urllib3",
-        "pocket_tts",
-        "kokoro_onnx",
-    ]:
-        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 @contextlib.contextmanager
@@ -74,6 +52,12 @@ def main() -> None:
         help="Display real-time turn timeline and compare latencies against README benchmarks",
     )
     parser.add_argument(
+        "--benchmark",
+        action="store_true",
+        default=os.getenv("BENCHMARK_ENABLED", "false").lower() in ("true", "1", "yes"),
+        help="Enable latency benchmarking, tool performance tracking, and session benchmark averages",
+    )
+    parser.add_argument(
         "--voice",
         type=str,
         default=os.getenv("VOICECHAT_TTS_VOICE"),
@@ -87,7 +71,9 @@ def main() -> None:
     )
     args, _ = parser.parse_known_args()
 
-    _setup_logging()
+    from constants import set_benchmark_enabled
+    set_benchmark_enabled(args.benchmark)
+    _setup_logging(args.benchmark)
     logger = logging.getLogger(__name__)
 
     # Pipe application and service logs to console during startup alongside spinner
@@ -215,6 +201,7 @@ def main() -> None:
             verbose=args.verbose,
             trigger_mode=is_trigger_mode,
             assistant_name=ASSISTANT_NAME,
+            benchmark_enabled=args.benchmark,
         )
         manager = ConversationManager(
             stt=stt,
@@ -351,15 +338,23 @@ def main() -> None:
                 role_label = "You" if msg["role"] == "user" else "Waffle"
                 print(f"{idx}. [{role_label}] {msg['text']}")
 
-        if args.verbose and ui.benchmarks:
+        # Output benchmark summary and log to logs/ (only if --benchmark is set)
+        if args.benchmark and ui is not None and hasattr(ui, "benchmark_tracker") and ui.benchmark_tracker.enabled:
+            summary_card = ui.benchmark_tracker.log_session_summary()
+            if ui.benchmarks:
+                print("\n" + summary_card)
+                print("[dim]Detailed records appended to logs/voicechat.log, logs/benchmark.log, and logs/benchmarks.jsonl[/dim]\n")
+
+        if args.benchmark and args.verbose and ui.benchmarks:
             print("\n" + "=" * 70)
-            print("LATENCY TIMELINE & README BENCHMARK COMPARISON")
+            print("PER-TURN LATENCY TIMELINE & README BENCHMARK COMPARISON")
             print("=" * 70)
             print(
                 f"README Reference: Warm Turn E2E = {README_TARGET_E2E}s | Cold Start = 6.8s | Before Opt = 3.3s\n"
             )
             for i, bm in enumerate(ui.benchmarks, start=1):
-                print(f"Turn #{i}:")
+                turn_type_str = f" [{bm.get('turn_type', 'conversation').upper().replace('_', ' ')}]" if bm.get('turn_type') else ""
+                print(f"Turn #{i}{turn_type_str}:")
                 print(f"  User       : \"{bm['user_text']}\"")
                 print(f"  Assistant  : \"{bm['assistant_text']}\"")
                 print("  Timeline Breakdown:")
@@ -369,6 +364,11 @@ def main() -> None:
                 print(
                     f"    2. LLM First Token    : {bm['first_token_dur']:5.2f}s  (Target: {README_TARGET_FIRST_TOKEN:4.2f}s  |  Δ {bm['first_token_dur'] - README_TARGET_FIRST_TOKEN:+.2f}s)"
                 )
+                if bm.get("total_tool_dur"):
+                    tools_desc = ", ".join(t.get("name", "tool") for t in bm.get("tools", [])) or "tool"
+                    print(
+                        f"    ↳ Tool Execution      : {bm['total_tool_dur']:5.2f}s  ({tools_desc})"
+                    )
                 print(
                     f"    3. LLM Full Reply     : {bm['full_llm_dur']:5.2f}s  (Target: {README_TARGET_LLM_FULL:4.2f}s  |  Δ {bm['full_llm_dur'] - README_TARGET_LLM_FULL:+.2f}s)"
                 )
@@ -382,6 +382,7 @@ def main() -> None:
 
         print("=" * 70)
         print("Waffle Audio stopped cleanly.\n")
+
 
 
 if __name__ == "__main__":

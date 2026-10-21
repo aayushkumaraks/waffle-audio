@@ -30,6 +30,8 @@ from services.stt.src import AudioQueueFull, STTConfig, STTListener, STTService
 from services.tools import ToolManager
 from services.tts.src import TTSConfig, TTSService
 
+from services.logging_config import setup_app_logging
+
 logger = logging.getLogger(__name__)
 
 AudioBuffer = npt.NDArray[np.float32]
@@ -52,7 +54,9 @@ class UnifiedPipeline:
         trigger_mode: bool = False,
         assistant_name: str | None = None,
     ) -> None:
+        setup_app_logging()
         self.vad = VADService(vad_config or VADConfig())
+
         self.echo_canceller: EchoCanceller = (
             AcousticEchoCanceller(aec_config or AECConfig())
             if enable_aec

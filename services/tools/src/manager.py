@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +13,7 @@ from constants import (
     DUCKDUCKGO_SEARCH_ENABLED,
     MCP_CONFIG_PATH,
     TOOLS_ENABLED,
+    is_benchmark_enabled,
 )
 from .mcp_client import MCPClientManager, MCPServerConfig, MCPToolDefinition
 from .search import DuckDuckGoSearch
@@ -239,77 +241,123 @@ class ToolManager:
 
         return clean_name or name
 
+    @property
+    def last_execution_info(self) -> dict[str, Any]:
+        """Return latency and metadata for the most recently executed tool."""
+        return getattr(self, "_last_execution_info", {}).copy()
+
     def execute_tool(self, name: str, arguments: dict[str, Any] | None = None) -> str:
-        """Execute a tool by name, with automatic DuckDuckGo fallback."""
+        """Execute a tool by name, with automatic DuckDuckGo fallback and benchmark timing."""
+        t_start = time.perf_counter()
         args = arguments or {}
         name = (name or "").strip()
+        server_name = "duckduckgo"
+        fallback_used = False
+        status = "SUCCESS"
+        result = ""
 
-        logger.info("Executing tool: %s with arguments: %s", name, args)
+        logger.info("[TOOL] Requesting tool execution: '%s' with arguments: %s", name, args)
 
         # 1. Built-in DuckDuckGo Search
         if name == "duckduckgo_search":
+            server_name = "built-in"
             query = self._build_search_query(name, args)
-            return self.search.search(str(query))
+            result = self.search.search(str(query))
 
-        # 2. Check if tool is provided by an installed MCP server
-        with self._lock:
-            if not self._initialized and not self._tools:
-                self._load_config()
-                self._discover_all_tools()
-                self._initialized = True
-            tool_entry = self._tools.get(name)
+        else:
+            # 2. Check if tool is provided by an installed MCP server
+            with self._lock:
+                if not self._initialized and not self._tools:
+                    self._load_config()
+                    self._discover_all_tools()
+                    self._initialized = True
+                tool_entry = self._tools.get(name)
 
-        if tool_entry is not None:
-            server_cfg, tool_def = tool_entry
-            # Normalize missing required arguments for common MCP tools
-            if name == "get_current_time" and "timezone" not in args:
-                args = dict(args)
-                args["timezone"] = "Etc/UTC"
-            elif name == "convert_time":
-                args = dict(args)
-                if "source_timezone" not in args:
-                    args["source_timezone"] = "Etc/UTC"
-                if "target_timezone" not in args:
-                    args["target_timezone"] = "Etc/UTC"
-            try:
-                result = self.mcp_client.call_tool_sync(server_cfg, name, args)
-                if self._is_unhelpful_or_error_result(result, name):
+            if tool_entry is not None:
+                server_cfg, tool_def = tool_entry
+                server_name = server_cfg.name
+                # Normalize missing required arguments for common MCP tools
+                if name == "get_current_time" and "timezone" not in args:
+                    args = dict(args)
+                    args["timezone"] = "Etc/UTC"
+                elif name == "convert_time":
+                    args = dict(args)
+                    if "source_timezone" not in args:
+                        args["source_timezone"] = "Etc/UTC"
+                    if "target_timezone" not in args:
+                        args["target_timezone"] = "Etc/UTC"
+                try:
+                    raw_result = self.mcp_client.call_tool_sync(server_cfg, name, args)
+                    if self._is_unhelpful_or_error_result(raw_result, name):
+                        logger.warning(
+                            "MCP tool '%s' on server '%s' returned an unhelpful or error result: %s. Falling back to DuckDuckGo search.",
+                            name,
+                            server_cfg.name,
+                            raw_result[:100],
+                        )
+                        fallback_used = True
+                        query = self._build_search_query(name, args)
+                        result = self.search.search(str(query))
+                    else:
+                        result = raw_result
+                except Exception as exc:
                     logger.warning(
-                        "MCP tool '%s' on server '%s' returned an unhelpful or error result: %s. Falling back to DuckDuckGo search.",
+                        "MCP tool '%s' on server '%s' failed: %s. Falling back to DuckDuckGo search.",
                         name,
                         server_cfg.name,
-                        result[:100],
+                        exc,
                     )
+                    fallback_used = True
+                    status = "FALLBACK"
                     query = self._build_search_query(name, args)
                     fallback = self.search.search(str(query))
-                    return fallback
-                return result
-            except Exception as exc:
-                logger.warning(
-                    "MCP tool '%s' on server '%s' failed: %s. Falling back to DuckDuckGo search.",
+                    result = f"[Tool '{name}' error: {exc}]\nFallback DuckDuckGo Search:\n{fallback}"
+            else:
+                # 3. No installed tool matches this function -> Fallback to DuckDuckGo search!
+                logger.info(
+                    "No installed MCP tool found for function '%s'. Falling back to DuckDuckGo search.",
                     name,
-                    server_cfg.name,
-                    exc,
                 )
+                fallback_used = True
+                server_name = "duckduckgo_fallback"
                 query = self._build_search_query(name, args)
-                fallback = self.search.search(str(query))
-                return f"[Tool '{name}' error: {exc}]\nFallback DuckDuckGo Search:\n{fallback}"
+                ddg_result = self.search.search(str(query))
+                result = (
+                    f"No installed tool matching function '{name}'. "
+                    f"DuckDuckGo search results for '{query}':\n{ddg_result}"
+                )
 
-        # 3. No installed tool matches this function -> Fallback to DuckDuckGo search!
-        logger.info(
-            "No installed MCP tool found for function '%s'. Falling back to DuckDuckGo search.",
-            name,
-        )
-        query = self._build_search_query(name, args)
-        ddg_result = self.search.search(str(query))
-        return (
-            f"No installed tool matching function '{name}'. "
-            f"DuckDuckGo search results for '{query}':\n{ddg_result}"
-        )
+        elapsed = time.perf_counter() - t_start
+        self._last_execution_info = {
+            "name": name,
+            "arguments": args,
+            "duration": round(elapsed, 4),
+            "duration_ms": round(elapsed * 1000.0, 2),
+            "server": server_name,
+            "fallback": fallback_used,
+            "status": status,
+            "result_len": len(result),
+            "result_preview": result[:120] if result else "",
+        }
+
+        if is_benchmark_enabled():
+            logger.info(
+                "[TOOL BENCHMARK] Tool '%s' executed on '%s' in %.3fs (%.1fms, fallback=%s, status=%s, size=%d chars)",
+                name,
+                server_name,
+                elapsed,
+                elapsed * 1000.0,
+                fallback_used,
+                status,
+                len(result),
+            )
+
+        return result
 
     def fallback_search(self, query: str) -> str:
         """Explicitly run a DuckDuckGo search."""
         return self.search.search(query)
+
 
     # ------------------------------------------------------------------
     # Configuration Management (Used by install_tool.py script)
