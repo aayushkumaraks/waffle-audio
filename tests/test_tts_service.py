@@ -158,8 +158,8 @@ class TestBaseTTSService(unittest.TestCase):
         with self.assertRaises(ServiceNotStarted):
             self.service.synthesize_direct("Test")
 
-    def test_chunk_coalescing(self) -> None:
-        """Micro-chunks from TTS stream are coalesced into smooth playback buffers."""
+    def test_direct_chunk_streaming(self) -> None:
+        """Chunks from TTS stream are dispatched directly to listeners without latency buffering."""
         listener = DummyTTSListener()
         self.service.add_listener(listener)
         self.service.start()
@@ -173,11 +173,12 @@ class TestBaseTTSService(unittest.TestCase):
             time.sleep(0.02)
 
         self.assertTrue(listener.completed)
-        self.assertEqual(len(listener.chunks), 1)
+        self.assertEqual(len(listener.chunks), 2)
         audio, rate, text = listener.chunks[0]
         self.assertEqual(rate, 24000)
-        self.assertEqual(len(audio), 1024)
+        self.assertEqual(len(audio), 512)
         self.assertEqual(text, "Hello world")
+        self.assertEqual(len(listener.chunks[1][0]), 512)
 
 
 class TestHFCache(unittest.TestCase):

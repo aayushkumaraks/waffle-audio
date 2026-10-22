@@ -258,13 +258,7 @@ class AudioPlayer(TTSListener):
                     stream = None
                     stream_rate = None
                 finally:
-                    # Only clear _playing if no more chunks are immediately pending in queue
-                    if self._playback_queue.empty() and not self._synthesizing.is_set() and not self._is_upstream_busy():
-                        # Wait brief hardware tail drain (~120ms) so OS audio ring buffer finishes playing
-                        # through the physical speaker before marking playback inactive and unmuting mic.
-                        if not self._interrupted.is_set():
-                            time.sleep(0.12)
-                        self._playing.clear()
+                    self._playing.clear()
                     self._maybe_complete_turn()
         finally:
             if stream is not None:

@@ -35,5 +35,5 @@ class PocketTTSService(BaseTTSService):
         assert self._engine is not None and self._voice_state is not None
         def stream() -> Iterator[AudioBuffer]:
             for chunk in self._engine.generate_audio_stream(self._voice_state, text):
-                yield chunk.detach().cpu().numpy().reshape(-1).astype(np.float32, copy=False)
+                yield chunk.detach().cpu().numpy().reshape(-1).astype(np.float32, copy=True)
         return stream(), self._engine.sample_rate

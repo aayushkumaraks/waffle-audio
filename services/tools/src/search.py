@@ -92,6 +92,7 @@ class DuckDuckGoSearch:
                     pass
             now = datetime.now(tz=tz).astimezone(tz=tz) if tz else datetime.now().astimezone()
             date_str = now.strftime("%A, %B %d, %Y")
+            time_str = now.strftime("%I:%M %p %Z").strip()
             if is_benchmark_enabled():
                 elapsed = time.perf_counter() - t_start
                 logger.info("[SEARCH BENCHMARK] Instant authoritative date/time query resolved in %.4fs: '%s'", elapsed, query)
