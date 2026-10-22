@@ -81,6 +81,12 @@ class BaseTTSService(ABC):
                     self._dispatch_synthesis_started()
                     chunks, rate = self._stream_audio(item)
                     first = True
+                    buffer: list[AudioBuffer] = []
+                    buffered_samples = 0
+                    # Coalesce micro-chunks into smooth buffers of at least ~250ms (e.g. 6000 samples @ 24kHz)
+                    # to prevent audio player buffer starvation / underruns while maintaining low latency.
+                    min_chunk_samples = int(rate * 0.25) if rate > 0 else 6000
+
                     for audio in chunks:
                         if self._epoch != epoch:
                             break  # interrupted: drop the rest of this utterance
@@ -88,8 +94,28 @@ class BaseTTSService(ABC):
                             t_first_chunk = time.perf_counter()
                         total_samples += len(audio)
                         sample_rate = rate
-                        self._dispatch_audio_chunk(audio, rate, text=item if first else "")
-                        first = False
+
+                        buffer.append(audio)
+                        buffered_samples += len(audio)
+
+                        if buffered_samples >= min_chunk_samples:
+                            coalesced = (
+                                np.concatenate(buffer).astype(np.float32, copy=False)
+                                if len(buffer) > 1
+                                else buffer[0]
+                            )
+                            self._dispatch_audio_chunk(coalesced, rate, text=item if first else "")
+                            first = False
+                            buffer = []
+                            buffered_samples = 0
+
+                    if buffer and self._epoch == epoch:
+                        coalesced = (
+                            np.concatenate(buffer).astype(np.float32, copy=False)
+                            if len(buffer) > 1
+                            else buffer[0]
+                        )
+                        self._dispatch_audio_chunk(coalesced, sample_rate, text=item if first else "")
             except Exception:
                 logger.exception("Speech synthesis failed.")
             finally:

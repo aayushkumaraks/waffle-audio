@@ -97,8 +97,8 @@ class TestSetupWizard(unittest.TestCase):
         "",           # Speed (default: 1.0)
         "",           # Mic (default: default)
         "",           # Trigger mode (default: false)
-        "",           # Barge in (default: true)
-        "",           # AEC (default: true)
+        "",           # Barge in (default: false)
+        "",           # AEC (default: false)
         "",           # Ollama url (default)
         "2",          # Model selection: index 2 -> gemma4:e4b
         "",           # GitHub token

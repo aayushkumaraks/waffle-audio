@@ -250,7 +250,7 @@ class ClauseChunker:
     _CLAUSE_PUNCT_RE = re.compile(r"([,;:\u2014]|\s--\s)[\"')\]]*\s")
     _SENTENCE_END_RE = re.compile(r"[.!?][\"')\]]*\s")
     _CONJUNCTION_RE = re.compile(
-        r"\s+(and|but|because|however|although|since|so|yet)\s+",
+        r"\s+(because|however|although|since|therefore)\s+",
         re.IGNORECASE,
     )
 
@@ -258,7 +258,7 @@ class ClauseChunker:
         self,
         *,
         first_chunk_min_words: int = 3,
-        clause_min_words: int = 5,
+        clause_min_words: int = 8,
         sentence_min_words: int = 3,
     ) -> None:
         self._first_chunk_min_words = first_chunk_min_words
@@ -305,26 +305,23 @@ class ClauseChunker:
             return None
 
         # Check sentence terminal boundaries first
-        sent_match = self._SENTENCE_END_RE.search(subtext)
-        if sent_match:
+        for sent_match in self._SENTENCE_END_RE.finditer(subtext):
             chunk_words = subtext[:sent_match.end()].split()
             min_w = self._first_chunk_min_words if is_first else self._sentence_min_words
             if len(chunk_words) >= min_w:
                 return sent_match.end()
 
         # Check intermediate clause punctuation: , ; : — --
-        clause_match = self._CLAUSE_PUNCT_RE.search(subtext)
-        if clause_match:
+        for clause_match in self._CLAUSE_PUNCT_RE.finditer(subtext):
             chunk_words = subtext[:clause_match.end()].split()
             min_w = self._first_chunk_min_words if is_first else self._clause_min_words
             if len(chunk_words) >= min_w:
                 return clause_match.end()
 
-        # Check coordinating conjunctions (and, but, because, etc.)
+        # Check subordinating conjunctions (because, however, although, etc.)
         min_conj_words = self._first_chunk_min_words if is_first else self._clause_min_words
         if len(words) >= min_conj_words + 2:
-            conj_match = self._CONJUNCTION_RE.search(subtext)
-            if conj_match:
+            for conj_match in self._CONJUNCTION_RE.finditer(subtext):
                 prefix = subtext[:conj_match.start()]
                 if len(prefix.split()) >= min_conj_words:
                     return conj_match.start()
