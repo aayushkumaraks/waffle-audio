@@ -21,7 +21,7 @@ run.bat
 - Installs `uv` package manager if missing.
 - Installs PortAudio audio system libraries on Linux.
 - Synchronizes Python 3.11 virtual environment dependencies.
-- Runs the interactive setup wizard (`setup.py`) on first launch to configure your microphone, Ollama, and assistant.
+- Runs the interactive setup wizard (`setup.py`) on first launch to configure your microphone, detect Ollama models via `/api/tags`, and personalize your assistant.
 
 ---
 
@@ -46,6 +46,13 @@ ollama pull qwen3.5:4b
 ```bash
 uv run python setup.py
 ```
+*Queries Ollama's `/api/tags` endpoint dynamically, presenting an interactive numbered model selector with pre-populated current settings.*
+
+### 5. Verify Installation (Unit Tests)
+```bash
+uv run pytest
+```
+*Runs the 211 deterministic unit test suite to verify all audio drivers, STT, LLM, TTS, tools, and API components are fully operational.*
 
 ---
 

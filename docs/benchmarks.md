@@ -64,3 +64,15 @@ Structured benchmark logs are written directly to:
 4. **Ollama Keep-Alive (`OLLAMA_KEEP_ALIVE=30m`)**: Keeps the LLM loaded in memory across turns, completely avoiding cold-load delays.
 5. **Acoustic Echo Cancellation (NLMS)**: Removes speaker feedback so the assistant never interrupts itself or loops back audio.
 6. **SIMD Audio Resampling**: Uses `soxr` / `scipy.signal.resample_poly` for polyphase downsampling with near-zero CPU overhead.
+
+---
+
+## 5. Unit Test Verification
+
+Benchmark logging calculations and pipeline latency optimizations are tested in:
+- `tests/test_benchmark_logging.py`: Metrics tracking, JSONL file appending, immediate flush, turn metrics calculation.
+- `tests/test_pipeline_optimizations.py`: `ClauseChunker` fast-path early dispatch and latency threshold validation.
+
+```bash
+uv run pytest tests/test_benchmark_logging.py tests/test_pipeline_optimizations.py
+```

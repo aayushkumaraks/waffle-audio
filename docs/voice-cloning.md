@@ -50,4 +50,17 @@ Set your default voice in `.env`:
 ```env
 VOICECHAT_TTS_VOICE="my_voice"
 ```
-Or run `python setup.py --force` to choose your cloned voice as the default.
+Or run `uv run python setup.py --force` to choose your cloned voice as the default.
+
+---
+
+## 4. Unit Test Verification
+
+Voice cloning and voice embedding resolution are verified with `tests/test_voice_cloning.py`:
+- Cloned voice directory scanning (`list_cloned_voices`)
+- Specifier resolution fallback (`resolve_voice_spec`)
+- Voice name sanitization and microphone recording mocks
+
+```bash
+uv run pytest tests/test_voice_cloning.py
+```

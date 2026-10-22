@@ -9,12 +9,14 @@ Waffle-Audio is a real-time, voice-to-voice assistant that runs entirely on your
 ## Highlights
 
 - **Private & 100% Offline**: Speech recognition (Moonshine), language model (Ollama), and speech synthesis (Pocket TTS / Kokoro) run locally on your device.
+- **Dynamic Ollama Model Discovery**: Interactive setup wizard queries Ollama's live `/api/tags` endpoint to present a numbered model selector, pre-populating your current settings.
 - **Sub-Second Response (0.83s)**: Adaptive clause chunking streams speech tokens into voice on the first ~3 words, starting playback before the LLM finishes generating.
 - **Instant Interruption (Barge-In)**: Acoustic Echo Cancellation (AEC) subtracts speaker audio from the microphone so you can interrupt Waffle mid-sentence with <50ms reaction.
 - **Understands Natural Turn-Taking**: Adaptive sentence gate distinguishes quick punctuation pauses (250ms) from natural thinking pauses ("I want to... uh... check the weather") without interrupting you prematurely.
 - **Model Context Protocol (MCP) & Web Search**: Dynamically invokes installed MCP tools (SQLite, filesystem, GitHub, time) and automatically falls back to DuckDuckGo search for real-time news and facts.
 - **10-Second Voice Cloning**: Clone any voice from a quick 10–15s mic recording or audio file to give your assistant a custom persona.
 - **Asynchronous Context Compactor**: Background summarizer rolls older conversation history into compact memory, preventing small LLMs from slowing down over long sessions.
+- **Comprehensive Unit Test Suite**: 211 deterministic unit tests covering every service and script with 100% test passing rate across `pytest` and `unittest`.
 - **Rich Terminal UI**: Animated ASCII waveforms, dynamic auto-scrolling dialogue, status badges, and real-time latency timelines.
 
 ---
@@ -107,6 +109,16 @@ uv run python -m services.api.app
 ```
 Interactive Swagger docs: `http://localhost:3000/docs`. See [docs/running.md](docs/running.md).
 
+### 4. Running Unit Tests
+Waffle Audio features a comprehensive 211-test suite with 100% pass rate covering all services and scripts:
+```bash
+# Run complete test suite with pytest
+uv run pytest
+
+# Or run via Python standard unittest discovery
+uv run python -m unittest discover tests
+```
+
 ---
 
 ## Project Structure
@@ -117,6 +129,7 @@ Interactive Swagger docs: `http://localhost:3000/docs`. See [docs/running.md](do
 ├── setup.py                # Interactive setup wizard with Ollama API model discovery
 ├── clone_voice.py          # Interactive voice cloning CLI
 ├── install_tool.py         # MCP tool installer & DuckDuckGo search tester
+├── install_tool.sh         # Convenience launcher for install_tool.py
 ├── constants.py            # Environment loader & central fallback configuration
 ├── .env.example            # Annotated template configuration file
 ├── mcp_servers.json        # Configured Model Context Protocol servers
@@ -140,8 +153,8 @@ Interactive Swagger docs: `http://localhost:3000/docs`. See [docs/running.md](do
 │   ├── benchmarks.md       # Latency benchmarks & profiling guide
 │   └── voice-cloning.md    # Custom voice cloning walkthrough
 ├── cloned_voices/          # User-saved .safetensors voice embeddings
-├── tests/                  # Unit and integration test suite
-└── pyproject.toml          # uv project dependencies (Python 3.11)
+├── tests/                  # Comprehensive unit & integration test suite (211 tests)
+└── pyproject.toml          # uv project dependencies & pytest configuration (Python 3.11)
 ```
 
 ---

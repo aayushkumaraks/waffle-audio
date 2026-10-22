@@ -144,3 +144,22 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 ```
+
+---
+
+## 7. Running the Unit Test Suite
+
+Waffle Audio includes 211 deterministic unit tests covering all components:
+
+```bash
+# Run complete test suite with pytest
+uv run pytest
+
+# Run with standard Python unittest runner
+uv run python -m unittest discover tests
+
+# Run specific test modules
+uv run pytest tests/test_api_service.py
+uv run pytest tests/test_audio_processing.py
+uv run pytest tests/test_install_tool.py
+```

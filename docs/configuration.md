@@ -118,3 +118,15 @@ uv run python setup.py --force
 | `VOICECHAT_API_PORT` | integer | `3000` | Port for FastAPI server. |
 | `VOICECHAT_CORS_ALLOW_ORIGINS` | string | `*` | Comma-separated allowed CORS origins for HTTP API. |
 | `BENCHMARK_ENABLED` | boolean | `false` | Globally enables latency benchmarking and structured logging. |
+
+---
+
+## 10. Configuration Validation & Testing
+
+Configuration loading, fallback defaults, and environment parsing are verified in:
+- `tests/test_constants.py`: Validates fallback defaults, type conversions (`_int_from_env`, `_float_from_env`), voice specifiers, and dynamic benchmark toggling.
+- `tests/test_setup.py`: Validates interactive prompt parsing, Ollama API `/api/tags` model selection, and complete `.env` file generation.
+
+```bash
+uv run pytest tests/test_constants.py tests/test_setup.py
+```

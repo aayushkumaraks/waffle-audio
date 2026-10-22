@@ -101,3 +101,15 @@ Installed tools are stored in standard MCP configuration format in `mcp_servers.
 ```
 
 To add custom MCP servers (either `stdio` or `sse`), simply add their definitions to `mcp_servers.json` or use `install_tool.py`. Waffle automatically discovers and initializes all configured servers on startup.
+
+---
+
+## 4. Unit Test Verification
+
+Tool execution and MCP server management are validated via:
+- `tests/test_tools.py`: Tool discovery, JSON schema extraction, execution dispatch, DuckDuckGo search fallback, emotional bridge phrases.
+- `tests/test_install_tool.py`: Preset installation, custom stdio/SSE registration, server removal, and CLI argument parsing.
+
+```bash
+uv run pytest tests/test_tools.py tests/test_install_tool.py
+```

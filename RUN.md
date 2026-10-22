@@ -76,7 +76,21 @@ Interactive Swagger documentation is available at: `http://localhost:3000/docs`
 
 ---
 
-## 6. Full Documentation
+## 6. Running Unit Tests
+
+Run the complete test suite across all services and scripts:
+
+```bash
+# Run via pytest (recommended)
+uv run pytest
+
+# Or run via Python unittest runner
+uv run python -m unittest discover tests
+```
+
+---
+
+## 7. Full Documentation
 
 - **[Installation & Setup](docs/setup.md)**
 - **[CLI & Running Guide](docs/running.md)**

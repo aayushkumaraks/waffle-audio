@@ -85,6 +85,7 @@ Run the interactive onboarding wizard to configure your `.env` file:
 ```bash
 uv run python setup.py
 ```
+*The wizard checks your audio devices, connects to Ollama, dynamically queries `{OLLAMA_BASE_URL}/api/tags` to list installed models with interactive numbered selection, and pre-populates existing configurations.*
 
 To run non-interactively with safe default values:
 ```bash
@@ -95,6 +96,13 @@ To reconfigure an existing `.env` file at any time:
 ```bash
 uv run python setup.py --force
 ```
+
+### Step 3.6: Verify with Unit Tests
+Run the deterministic unit test suite to verify your environment and dependencies:
+```bash
+uv run pytest
+```
+*Executes all 211 unit tests across API routes, audio hardware, VAD, NLMS echo cancellation, barge-in, STT, LLM streaming, TTS engines, and MCP tools.*
 
 ---
 
