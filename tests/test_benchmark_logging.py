@@ -265,5 +265,62 @@ class TestLoggingConfig(unittest.TestCase):
         self.assertFalse(benchmark_file.exists())
 
 
+class TestLLMProviderBenchmarkIntegration(unittest.TestCase):
+    """Test LLMProvider integration with benchmark metrics."""
+
+    def test_tool_followup_llm_benchmarking_integration(self):
+        """Verify that LLMProvider._execute_tools_and_stream_reply calculates durations and logs benchmarks without NameError."""
+        from unittest.mock import MagicMock, patch
+        from models import Message
+        from services.llm.src.llm_provider import LLMCallbacks, LLMProvider, LLMProviderConfig
+
+        class MockCallbacks(LLMCallbacks):
+            def __init__(self):
+                self.started = False
+                self.completed = False
+                self.followup_timings = None
+                self.updates = []
+
+            def on_generation_started(self):
+                self.started = True
+
+            def on_generation_updated(self, text: str):
+                self.updates.append(text)
+
+            def on_generation_completed(self, text: str):
+                self.completed = True
+
+            def record_followup_llm(self, first_token_dur: float, full_dur: float):
+                self.followup_timings = (first_token_dur, full_dur)
+
+        mock_tool_mgr = MagicMock()
+        mock_tool_mgr.execute_tool.return_value = "Sunny, 20C"
+        mock_tool_mgr.last_execution_info = {"duration": 0.1, "fallback": False, "server": "mcp"}
+        provider = LLMProvider(LLMProviderConfig(tools_enabled=True), tool_manager=mock_tool_mgr)
+        callbacks = MockCallbacks()
+
+        # Mock streaming response from Ollama
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.iter_lines.return_value = [
+            json.dumps({"message": {"content": "Here is "}}),
+            json.dumps({"message": {"content": "the weather."}}),
+        ]
+        provider._client.send = MagicMock(return_value=mock_response)
+
+        tool_calls = [{"function": {"name": "duckduckgo_search", "arguments": {"query": "weather"}}}]
+        messages = [Message(role="user", content="What is the weather?")]
+
+        with patch("services.llm.src.llm_provider.is_benchmark_enabled", return_value=True):
+            # This must execute without NameError (fu_full_dur, fu_first_tok_dur)
+            provider._execute_tools_and_stream_reply(messages, tool_calls, callbacks)
+
+        self.assertTrue(callbacks.completed)
+        self.assertIsNotNone(callbacks.followup_timings)
+        self.assertGreaterEqual(callbacks.followup_timings[0], 0.0)
+        self.assertGreaterEqual(callbacks.followup_timings[1], 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()
+
