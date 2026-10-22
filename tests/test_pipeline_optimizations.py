@@ -175,6 +175,57 @@ class TestLLMContextAndVoiceFormatting(unittest.TestCase):
         self.assertEqual(len(req["messages"]), 17)
         self.assertEqual(req["messages"][-1]["content"], "msg 29")
 
+    def test_conversation_manager_preserves_tool_calls_in_history(self):
+        """ConversationManager should record tool calls and tool outputs in history."""
+        mock_stt = MagicMock()
+        mock_llm = MagicMock()
+        mock_tts = MagicMock()
+
+        manager = ConversationManager(
+            stt=mock_stt,
+            llm=mock_llm,
+            tts=mock_tts,
+        )
+
+        manager._trigger_llm("What is the weather in Delhi?")
+        manager.on_tool_started("duckduckgo_search", {"query": "weather in New Delhi"})
+        manager.on_tool_completed("duckduckgo_search", "Sunny, 28C", duration=0.2)
+        manager.on_generation_completed("It is sunny and 28 degrees in Delhi.")
+
+        # History should have: user utterance, assistant tool call, tool response, final assistant speech
+        roles = [m.role for m in manager.history]
+        self.assertEqual(roles, ["user", "assistant", "tool", "assistant"])
+        self.assertIsNotNone(manager.history[1].tool_calls)
+        self.assertEqual(manager.history[1].tool_calls[0]["function"]["name"], "duckduckgo_search")
+        self.assertEqual(manager.history[2].content, "Sunny, 28C")
+        self.assertEqual(manager.history[3].content, "It is sunny and 28 degrees in Delhi.")
+
+    def test_llm_provider_preserves_tool_messages_and_tool_calls(self):
+        """LLMProvider._build_request should serialize tool roles and tool_calls properly."""
+        provider = LLMProvider(LLMProviderConfig())
+        messages = [
+            Message(role="user", content="Check weather"),
+            Message(
+                role="assistant",
+                content="",
+                tool_calls=[{"function": {"name": "duckduckgo_search", "arguments": {"query": "weather"}}}],
+            ),
+            Message(role="tool", content="Sunny, 28C"),
+            Message(role="assistant", content="The weather is sunny."),
+        ]
+        req = provider._build_request(messages)
+
+        serialized = req["messages"]
+        # Index 0 is system message
+        self.assertEqual(serialized[1]["role"], "user")
+        self.assertEqual(serialized[2]["role"], "assistant")
+        self.assertEqual(
+            serialized[2]["tool_calls"][0]["function"]["name"], "duckduckgo_search"
+        )
+        self.assertEqual(serialized[3]["role"], "tool")
+        self.assertEqual(serialized[3]["content"], "Sunny, 28C")
+        self.assertEqual(serialized[4]["role"], "assistant")
+
 
 class TestBargeInAndEchoCancellation(unittest.TestCase):
     def test_barge_in_controller_interrupts_player_and_llm(self):

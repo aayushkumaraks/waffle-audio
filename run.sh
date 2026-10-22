@@ -22,8 +22,9 @@ cat << "EOF"
 EOF
 echo -e "${RESET}${BOLD}          Voice-to-Voice AI Assistant (CLI)${RESET}\n"
 
-# Ensure PATH includes standard user local bin directories
+# Ensure PATH includes standard user local bin directories and stdout is unbuffered
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+export PYTHONUNBUFFERED=1
 
 # 1. Check & Install uv if not present
 echo -e "${CYAN}[1/4]${RESET} Checking package manager (uv)..."

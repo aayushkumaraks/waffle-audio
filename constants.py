@@ -36,7 +36,7 @@ def _load_env_file(filepath: Path | str = ".env") -> None:
                         or (value[0] == "'" and value[-1] == "'")
                     ):
                         value = value[1:-1]
-                    if key not in os.environ:
+                    if key not in os.environ or not os.environ[key].strip():
                         os.environ[key] = value
     except Exception:
         pass
@@ -127,11 +127,11 @@ FILLER_PHRASES_ENABLED: bool = os.getenv("VOICECHAT_FILLER_PHRASES_ENABLED", "tr
 
 CONTEXT_COMPACTOR_ENABLED: bool = os.getenv("VOICECHAT_COMPACTOR_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 # Trigger compaction when history reaches or exceeds this number of turns (turn = user+assistant pair)
-CONTEXT_COMPACTOR_MAX_TURNS: int = _int_from_env("VOICECHAT_COMPACTOR_MAX_TURNS", 6)
-# Trigger compaction if total characters across history exceeds this limit (~500-700 tokens)
-CONTEXT_COMPACTOR_CHAR_LIMIT: int = _int_from_env("VOICECHAT_COMPACTOR_CHAR_LIMIT", 2500)
+CONTEXT_COMPACTOR_MAX_TURNS: int = _int_from_env("VOICECHAT_COMPACTOR_MAX_TURNS", 12)
+# Trigger compaction if total characters across history exceeds this limit (~1000-1500 tokens)
+CONTEXT_COMPACTOR_CHAR_LIMIT: int = _int_from_env("VOICECHAT_COMPACTOR_CHAR_LIMIT", 5000)
 # Recent turns (pairs) to always preserve verbatim at the end of the history
-CONTEXT_COMPACTOR_PRESERVE_TURNS: int = _int_from_env("VOICECHAT_COMPACTOR_PRESERVE_TURNS", 2)
+CONTEXT_COMPACTOR_PRESERVE_TURNS: int = _int_from_env("VOICECHAT_COMPACTOR_PRESERVE_TURNS", 6)
 # When false (default), uses fast non-blocking heuristic summarizer to prevent Ollama inference contention
 CONTEXT_COMPACTOR_USE_LLM: bool = os.getenv("VOICECHAT_COMPACTOR_USE_LLM", "false").lower() in {"1", "true", "yes", "on"}
 
@@ -141,7 +141,7 @@ CONTEXT_COMPACTOR_USE_LLM: bool = os.getenv("VOICECHAT_COMPACTOR_USE_LLM", "fals
 # Conversation Limits & Follow-up Window
 # ---------------------------------------------------------------------------
 
-VOICECHAT_MAX_HISTORY_TURNS: int = _int_from_env("VOICECHAT_MAX_HISTORY_TURNS", 8)
+VOICECHAT_MAX_HISTORY_TURNS: int = _int_from_env("VOICECHAT_MAX_HISTORY_TURNS", 12)
 MAX_HISTORY_TURNS: int = VOICECHAT_MAX_HISTORY_TURNS
 VOICECHAT_FOLLOW_UP_WINDOW: float = _float_from_env("VOICECHAT_FOLLOW_UP_WINDOW", 15.0)
 FOLLOW_UP_WINDOW_SECONDS: float = VOICECHAT_FOLLOW_UP_WINDOW

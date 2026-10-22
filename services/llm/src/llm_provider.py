@@ -749,14 +749,18 @@ class LLMProvider:
             )
 
         if u_name and u_name.strip():
-            parts.append(f"You are speaking with {u_name.strip()}.")
+            parts.append(f"You are speaking with {u_name.strip()}. Address the user by this name naturally when appropriate.")
         else:
             parts.append(
                 "The user's name is not provided. Never assume, invent, or use any name to address or refer to the user."
             )
 
         if u_loc and u_loc.strip():
-            parts.append(f"The user's current location is {u_loc.strip()}.")
+            parts.append(
+                f"The user's current location is {u_loc.strip()}. "
+                "Always assume questions about local weather, news, time, or events refer to this location unless the user explicitly specifies another place. "
+                "Never ask the user for their location if it is already known."
+            )
         if u_tz and u_tz.strip():
             parts.append(f"The user's timezone is {u_tz.strip()}.")
 
@@ -786,7 +790,9 @@ class LLMProvider:
         )
         return (
             f"{prefix}\n\n"
-            "Be directly helpful, concise, and engaging in your spoken answers.\n\n"
+            "Be directly helpful, concise, and engaging in your spoken answers.\n"
+            "Always maintain conversational continuity across turns. If the user refers to a topic, person, or location from earlier in the conversation, remember and use that context naturally.\n"
+            "If the user asks whether you called a tool or looked something up, answer truthfully based on the tool calls in the conversation history.\n\n"
             f"{cls._VOICE_RULES}"
         )
 
@@ -814,7 +820,8 @@ class LLMProvider:
             "- If an installed MCP tool matches the function, invoke that tool.\n"
             "- If the user's message does not require live information or external tools, reply directly with conversational speech without invoking any tools.\n"
             "- NEVER emit conversational text saying you are searching, looking up, checking updates, or asking for time (e.g. do NOT say 'I am searching', 'looking that up', 'checking updates', 'please give me a moment', or 'I will be with you in a moment'). You cannot search in the background. If you need information, you MUST execute the tool call right now.\n"
-            "- Formulate complete, standalone search queries: if the user refers to previous context or pronouns (e.g., 'search it', 'look that up', 'check for that'), resolve the topic into a complete standalone search query (e.g. query='positive news events New Delhi').\n"
+            "- CONVERSATION CONTEXT & RESOLUTION: Always maintain conversational continuity across turns. If the user refers to previous context or pronouns (e.g., 'search it', 'look that up', 'check for that', 'what about the weather', 'is it raining?'), resolve the subject, topic, and location from the conversation history into a complete standalone tool call query (e.g. query='current weather in New Delhi India'). Never ask the user for information (like their city or what to search) if they already mentioned it or if their location is already known.\n"
+            "- TOOL CALL MEMORY: When the user asks about past actions or tools used earlier in the conversation (e.g., 'Did you look that up?', 'What tool did you call?'), refer accurately to the tool execution history in the conversation.\n"
             "- NEVER say you cannot browse the internet, do not have real-time information, or cite a knowledge cutoff date. Always execute the appropriate tool to look up the answer.\n\n"
             f"{cls._VOICE_RULES}"
         )
@@ -851,7 +858,7 @@ class LLMProvider:
         tools: list[dict[str, Any]] | None = None,
         system_prompt: str | None = None,
     ) -> dict[str, Any]:
-        """Build an Ollama chat request with sliding window guard and optional tools."""
+        """Build an Ollama chat request preserving full message roles and tool calls."""
         sliding_messages = messages[-16:] if len(messages) > 16 else messages
 
         system_message = {
@@ -859,15 +866,19 @@ class LLMProvider:
             "content": system_prompt or self._build_default_system_prompt(**self._get_persona_kwargs()),
         }
 
+        serialized_messages: list[dict[str, Any]] = [system_message]
+        for message in sliding_messages:
+            msg_dict: dict[str, Any] = {
+                "role": message.role,
+                "content": message.content or "",
+            }
+            if message.tool_calls:
+                msg_dict["tool_calls"] = message.tool_calls
+            serialized_messages.append(msg_dict)
+
         request_payload: dict[str, Any] = {
             "model": self._config.model,
-            "messages": [system_message] + [
-                {
-                    "role": message.role if message.role in {"user", "assistant"} else "user",
-                    "content": message.content,
-                }
-                for message in sliding_messages
-            ],
+            "messages": serialized_messages,
             "stream": True,
             "think": False,
             "keep_alive": OLLAMA_KEEP_ALIVE,

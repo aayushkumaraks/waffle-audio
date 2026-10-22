@@ -39,10 +39,12 @@ def _suppress_c_stderr():
 
 
 def main() -> None:
-    # 1. Start console and spinner IMMEDIATELY so the user gets instant feedback
+    # 1. Start console and unbuffered startup logging immediately so user has constant visibility
     console = Console()
-    status = console.status("[bold cyan]Initializing Waffle Audio pipeline...[/bold cyan]", spinner="dots")
-    status.start()
+    console.print()
+    console.print("[bold cyan]======================================================================[/bold cyan]")
+    console.print("[bold cyan]                      Waffle Audio Initialization                     [/bold cyan]")
+    console.print("[bold cyan]======================================================================[/bold cyan]\n")
 
     parser = argparse.ArgumentParser(description="Waffle Audio Voice Assistant CLI")
     parser.add_argument(
@@ -76,12 +78,12 @@ def main() -> None:
     _setup_logging(args.benchmark)
     logger = logging.getLogger(__name__)
 
-    # Pipe application and service logs to console during startup alongside spinner
+    # Pipe application and service logs to console during startup cleanly and unbuffered
     class _StartupLogHandler(logging.Handler):
         def emit(self, record: logging.LogRecord) -> None:
             try:
                 msg = self.format(record)
-                console.log(f"[dim]{msg}[/dim]")
+                console.print(f"  [dim]• {msg}[/dim]", highlight=False)
             except Exception:
                 pass
 
@@ -115,12 +117,12 @@ def main() -> None:
     README_TARGET_TTS_FIRST = 1.82
 
     try:
-        console.log(
-            f"[bold cyan]Starting Waffle Audio CLI[/bold cyan] (verbose={args.verbose}, voice={args.voice or 'default'})"
+        console.print(
+            f"[bold cyan]Starting Waffle Audio CLI[/bold cyan] (verbose={args.verbose}, voice={args.voice or 'default'})\n"
         )
         logger.info("Starting Waffle Audio CLI (verbose=%s, voice=%s)...", args.verbose, args.voice or "default")
 
-        status.update("[bold cyan]Loading core drivers & constants...[/bold cyan]")
+        console.print("[bold cyan][1/6][/bold cyan] Loading core audio drivers & configuration...")
         import numpy as np
         import sounddevice as sd
         from rich.live import Live as _Live
@@ -133,10 +135,10 @@ def main() -> None:
             OLLAMA_MODEL,
             TRIGGER_MODE,
         )
-        console.log("[green]✓[/green] Core audio drivers loaded")
+        console.print("  [green]✓[/green] Core audio drivers loaded.\n")
 
         # Initialize audio and conversation services
-        status.update("[bold cyan]Initializing Voice Activity Detection (VAD) & Echo Cancellation...[/bold cyan]")
+        console.print("[bold cyan][2/6][/bold cyan] Initializing Voice Activity Detection & Echo Cancellation...")
         from services.audio_processing.src import (
             AcousticEchoCanceller,
             BargeInController,
@@ -145,37 +147,32 @@ def main() -> None:
         )
         vad = VADService(VADConfig(min_silence_duration_ms=200, pre_speech_padding_ms=200))
         aec = AcousticEchoCanceller()
-        console.log("[green]✓[/green] VAD & Echo Cancellation initialized")
+        console.print("  [green]✓[/green] VAD & Echo Cancellation initialized.\n")
 
-        status.update("[bold cyan]Initializing Speech-to-Text (Moonshine ONNX)...[/bold cyan]")
-        from services.stt.src import AudioQueueFull, STTService
-        stt = STTService()
-        console.log("[green]✓[/green] STT Service initialized")
-
-        status.update(f"[bold cyan]Connecting to LLM ({OLLAMA_MODEL}) & loading MCP tools...[/bold cyan]")
+        console.print(f"[bold cyan][3/6][/bold cyan] Connecting to LLM ({OLLAMA_MODEL}) & discovering MCP tools...")
         from services.llm.src import LLMProvider, LLMProviderConfig, LLMService
         provider = LLMProvider(LLMProviderConfig())
         llm = LLMService(provider)
         tool_count = len(provider.tool_manager.get_ollama_tools())
-        console.log(f"[green]✓[/green] LLM Service initialized (model: {OLLAMA_MODEL}, tools available: {tool_count})")
+        console.print(f"  [green]✓[/green] LLM connected & {tool_count} tool(s) registered.\n")
 
-
-        status.update("[bold cyan]Loading Text-to-Speech engine...[/bold cyan]")
+        console.print(f"[bold cyan][4/6][/bold cyan] Loading Text-to-Speech engine ({args.voice or 'default'})...")
         from services.tts.src import TTSConfig, TTSService
         tts = TTSService(TTSConfig(voice=args.voice))
-        console.log("[green]✓[/green] TTS Service initialized")
-
-        status.update("[bold cyan]Initializing Audio Playback system...[/bold cyan]")
         from services.audio.src import AudioPlayer
         player = AudioPlayer()
         player.set_upstream_busy(lambda: getattr(tts, "is_busy", False))
         player.add_playback_monitor(aec.feed_reference)
         tts.add_listener(player)
         provider.set_tts(tts)
-        console.log("[green]✓[/green] Audio Player & Filler Phrases initialized")
+        console.print("  [green]✓[/green] TTS Engine and Audio Player initialized.\n")
 
+        console.print("[bold cyan][5/6][/bold cyan] Initializing Speech-to-Text (Moonshine ONNX)...")
+        from services.stt.src import AudioQueueFull, STTService
+        stt = STTService()
+        console.print("  [green]✓[/green] STT Service initialized.\n")
 
-        status.update("[bold cyan]Wiring Conversation Pipeline & Barge-In Controller...[/bold cyan]")
+        console.print("[bold cyan][6/6][/bold cyan] Starting background workers & opening microphone stream (16 kHz)...")
         from services.conversation.src import ConversationManager, ConversationUI
         from services.conversation.src.ui import (
             README_TARGET_E2E as _E2E,
@@ -192,8 +189,8 @@ def main() -> None:
 
         is_trigger_mode = bool(args.trigger_mode or TRIGGER_MODE)
         if is_trigger_mode:
-            console.log(
-                f"[yellow]Trigger mode ACTIVE[/yellow]: Assistant will only respond when 'Hey {ASSISTANT_NAME}' is spoken"
+            console.print(
+                f"  [yellow]Trigger mode ACTIVE[/yellow]: Assistant will only respond when 'Hey {ASSISTANT_NAME}' is spoken"
             )
             logger.info("Trigger mode active (trigger word: 'Hey %s')", ASSISTANT_NAME)
 
@@ -225,32 +222,14 @@ def main() -> None:
         stt.add_listener(ui)
         llm.add_listener(ui)
         player.add_playback_listener(ui)
-        console.log("[green]✓[/green] Real-time event listeners wired")
 
         # Start backend services
-        status.update("[bold cyan]Starting Voice Activity Detection worker...[/bold cyan]")
         vad.start()
-        console.log("[green]✓[/green] VAD service started")
-
-        status.update("[bold cyan]Starting Audio Player worker...[/bold cyan]")
         player.start()
-        console.log("[green]✓[/green] Audio Player started")
-
-        status.update("[bold cyan]Starting TTS engine (loading models & voices)...[/bold cyan]")
         tts.start()
-        console.log("[green]✓[/green] TTS service started")
-
-        status.update("[bold cyan]Starting LLM worker thread...[/bold cyan]")
         llm.start()
-        console.log("[green]✓[/green] LLM service started")
-
-        status.update("[bold cyan]Starting Conversation Manager...[/bold cyan]")
         manager.start()
-        console.log("[green]✓[/green] Conversation Manager started")
-
-        status.update("[bold cyan]Starting STT engine (loading Moonshine model)...[/bold cyan]")
         stt.start()
-        console.log("[green]✓[/green] STT service started")
 
         def audio_callback(indata, frames, time_info, status_flag):
             if not BARGE_IN_ENABLED and player.is_playing:
@@ -271,7 +250,6 @@ def main() -> None:
             except Exception:
                 logger.exception("Error in CLI audio callback.")
 
-        status.update("[bold cyan]Opening microphone input stream (16 kHz)...[/bold cyan]")
         with _suppress_c_stderr():
             stream = sd.InputStream(
                 samplerate=16000,
@@ -282,14 +260,12 @@ def main() -> None:
                 device=AUDIO_INPUT_DEVICE,
             )
             stream.start()
-        console.log("[green]✓[/green] Microphone audio stream active")
+        console.print("  [green]✓[/green] Microphone audio stream active (16 kHz).\n")
 
-        status.update("[bold green]All services ready. Launching UI...[/bold green]")
-        time.sleep(0.3)
+        console.print("[bold green]✓ All services initialized successfully. Launching Voice Assistant UI...[/bold green]\n")
+        time.sleep(0.4)
     finally:
-        # Take the spinner off and detach console log handler once initialization completes
         logging.getLogger().removeHandler(startup_log_handler)
-        status.stop()
 
     try:
         # Run alternate screen live UI with 10 Hz refresh

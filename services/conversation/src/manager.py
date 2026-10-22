@@ -6,7 +6,7 @@ import re
 import threading
 import time
 
-from typing import Callable
+from typing import Any, Callable
 
 from constants import (
     ASSISTANT_NAME,
@@ -87,6 +87,8 @@ class ConversationManager(LLMListener):
 
         self._started = False
         self._pending_generation = False
+        self._current_turn_tool_calls: list[dict[str, Any]] = []
+        self._current_turn_tool_results: list[dict[str, Any]] = []
         self._state_lock = threading.Lock()
 
     def start(self) -> None:
@@ -118,8 +120,10 @@ class ConversationManager(LLMListener):
 
     def reset(self) -> None:
         """Clear the current conversation history."""
-
-        self._history.clear()
+        with self._state_lock:
+            self._history.clear()
+            self._current_turn_tool_calls.clear()
+            self._current_turn_tool_results.clear()
 
         logger.info("Conversation history cleared.")
 
@@ -242,9 +246,12 @@ class ConversationManager(LLMListener):
 
     def _prune_history(self) -> None:
         """Maintain a strict sliding context window (last N turns) to keep TTFT low."""
-        max_messages = self._max_history_turns * 2
-        if len(self._history) > max_messages:
-            self._history = self._history[-max_messages:]
+        user_indices = [i for i, m in enumerate(self._history) if m.role == "user"]
+        if len(user_indices) > self._max_history_turns:
+            cutoff = user_indices[-self._max_history_turns]
+            self._history = self._history[cutoff:]
+        elif len(self._history) > self._max_history_turns * 2:
+            self._history = self._history[-(self._max_history_turns * 2):]
 
     def _trigger_llm(self, text: str) -> None:
         """Called by SentenceGate once the utterance looks complete."""
@@ -336,6 +343,37 @@ class ConversationManager(LLMListener):
         except Exception:
             logger.exception("Could not queue speech.")
 
+    def on_tool_started(
+        self, tool_name: str, arguments: dict, phrase: str | None = None
+    ) -> None:
+        """Record tool invocation initiated by LLM during the current turn."""
+        with self._state_lock:
+            self._current_turn_tool_calls.append(
+                {
+                    "function": {
+                        "name": tool_name,
+                        "arguments": arguments,
+                    }
+                }
+            )
+
+    def on_tool_completed(
+        self,
+        tool_name: str,
+        result: str,
+        duration: float = 0.0,
+        fallback: bool = False,
+        server: str = "mcp",
+    ) -> None:
+        """Record tool execution results during the current turn."""
+        with self._state_lock:
+            self._current_turn_tool_results.append(
+                {
+                    "name": tool_name,
+                    "result": result,
+                }
+            )
+
     def on_generation_completed(self, text: str) -> None:
         with self._state_lock:
             if not self._pending_generation:
@@ -344,12 +382,33 @@ class ConversationManager(LLMListener):
                 )
                 return
             self._pending_generation = False
+            turn_tool_calls = list(self._current_turn_tool_calls)
+            turn_tool_results = list(self._current_turn_tool_results)
+            self._current_turn_tool_calls.clear()
+            self._current_turn_tool_results.clear()
 
         logger.info("LLM generation completed: %s", text)
 
         remainder = self._chunker.finalize(text)
         if remainder:
             self._speak(remainder)
+
+        # Preserve tool execution history in conversation so subsequent turns know what tools were called
+        if turn_tool_calls:
+            self._history.append(
+                Message(
+                    role="assistant",
+                    content="",
+                    tool_calls=turn_tool_calls,
+                )
+            )
+            for res in turn_tool_results:
+                self._history.append(
+                    Message(
+                        role="tool",
+                        content=res["result"],
+                    )
+                )
 
         self._history.append(
             Message(
@@ -375,6 +434,8 @@ class ConversationManager(LLMListener):
             self._pending_generation = False
             partial = self._partial_reply.strip()
             self._partial_reply = ""
+            self._current_turn_tool_calls.clear()
+            self._current_turn_tool_results.clear()
         self._chunker.reset()
 
         # Keep user/assistant alternation in the LLM context: record the part

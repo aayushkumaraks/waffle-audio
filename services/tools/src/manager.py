@@ -277,15 +277,19 @@ class ToolManager:
                 server_cfg, tool_def = tool_entry
                 server_name = server_cfg.name
                 # Normalize missing required arguments for common MCP tools
+                from constants import USER_LOCATION, USER_TIMEZONE
                 if name == "get_current_time" and "timezone" not in args:
                     args = dict(args)
-                    args["timezone"] = "Etc/UTC"
+                    args["timezone"] = USER_TIMEZONE or "Etc/UTC"
                 elif name == "convert_time":
                     args = dict(args)
                     if "source_timezone" not in args:
-                        args["source_timezone"] = "Etc/UTC"
+                        args["source_timezone"] = USER_TIMEZONE or "Etc/UTC"
                     if "target_timezone" not in args:
-                        args["target_timezone"] = "Etc/UTC"
+                        args["target_timezone"] = USER_TIMEZONE or "Etc/UTC"
+                elif "weather" in name and USER_LOCATION and not any(k in args for k in ("city", "location", "place", "query")):
+                    args = dict(args)
+                    args["location"] = USER_LOCATION
                 try:
                     raw_result = self.mcp_client.call_tool_sync(server_cfg, name, args)
                     if self._is_unhelpful_or_error_result(raw_result, name):

@@ -108,8 +108,8 @@ class DuckDuckGoSearch:
 
         # Inject user location into generic weather or local queries if not already present
         from constants import USER_LOCATION
-        if USER_LOCATION and re.search(r"^\b(weather|forecast|current weather|news|headlines)\b", cleaned, re.I):
-            if USER_LOCATION.lower() not in cleaned.lower():
+        if USER_LOCATION and re.search(r"\b(weather|forecast|temperature|news|headlines)\b", cleaned, re.I):
+            if USER_LOCATION.lower() not in cleaned.lower() and USER_LOCATION.lower() not in query.lower():
                 cleaned = f"{cleaned} in {USER_LOCATION}"
 
         logger.info("[SEARCH] Querying DuckDuckGo: '%s' (cleaned: '%s', is_news: %s, limit: %d)", query, cleaned, is_news, limit)
@@ -118,7 +118,7 @@ class DuckDuckGoSearch:
             with DDGS(timeout=self.timeout) as ddgs:
                 # 1. For news queries, try ddgs.news first
                 if is_news:
-                    for candidate in (query, cleaned):
+                    for candidate in (cleaned, query):
                         if not candidate:
                             continue
                         try:
@@ -130,19 +130,17 @@ class DuckDuckGoSearch:
                             last_error = e
                             logger.debug("ddgs.news failed for '%s': %s", candidate, e)
 
-                # 2. Try standard text search
+                # 2. Try standard text search (cleaned query with location first, then raw query)
                 if not results:
-                    try:
-                        results = list(ddgs.text(query, max_results=limit))
-                    except Exception as e:
-                        last_error = e
-                        logger.debug("ddgs.text failed for '%s': %s", query, e)
-
-                # 3. If no results or error, try cleaned query text search
-                if not results and cleaned and cleaned.lower() != query.lower():
-                    try:
-                        results = list(ddgs.text(cleaned, max_results=limit))
-                    except Exception as e:
+                    candidates = [cleaned, query] if cleaned and cleaned.lower() != query.lower() else [query]
+                    for candidate in candidates:
+                        try:
+                            results = list(ddgs.text(candidate, max_results=limit))
+                            if results:
+                                break
+                        except Exception as e:
+                            last_error = e
+                            logger.debug("ddgs.text failed for '%s': %s", candidate, e)
                         last_error = e
                         logger.debug("ddgs.text cleaned failed for '%s': %s", cleaned, e)
 

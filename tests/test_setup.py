@@ -156,6 +156,20 @@ class TestEnvLoadingAndPersonalization(unittest.TestCase):
         self.assertEqual(os.environ.get("TEST_DOUBLE_QUOTES"), "world with spaces")
         self.assertEqual(os.environ.get("TEST_SINGLE_QUOTES"), "single quoted")
 
+    def test_load_env_file_overrides_empty_environment_variables(self) -> None:
+        self.env_file.write_text(
+            'USER_NAME="Aayush"\n'
+            'USER_LOCATION="New Delhi, India"\n',
+            encoding="utf-8",
+        )
+        # Pre-set empty environment variables (as often occurs in subshells)
+        os.environ["USER_NAME"] = ""
+        os.environ["USER_LOCATION"] = "   "
+
+        _load_env_file(self.env_file)
+        self.assertEqual(os.environ.get("USER_NAME"), "Aayush")
+        self.assertEqual(os.environ.get("USER_LOCATION"), "New Delhi, India")
+
     def test_llm_provider_builds_personalized_prompt(self) -> None:
         with patch("services.llm.src.llm_provider.ASSISTANT_NAME", "Jarvis"), \
              patch("services.llm.src.llm_provider.USER_NAME", "Tony Stark"), \
