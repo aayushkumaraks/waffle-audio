@@ -67,6 +67,7 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
         self._llm_generated_text: str = ""
         self._is_generating: bool = False
         self._active_tool: str | None = None
+        self._active_tool_args: dict | None = None
         self._active_phrase: str | None = None
         self._t_tool_start: float | None = None
 
@@ -185,6 +186,7 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
             if clean_text:
                 self._status = "PROCESSING"
                 self._is_generating = True
+                self._benchmark_tracker.clear_turn_tools()
                 self._t_gate_fired = time.perf_counter()
                 self._history.append({"role": "user", "text": clean_text})
                 self._pending_user_turn = ""
@@ -256,6 +258,7 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
     ) -> None:
         with self._lock:
             self._active_tool = tool_name
+            self._active_tool_args = arguments
             self._active_phrase = phrase
             self._status = "PROCESSING"
             self._t_tool_start = time.perf_counter()
@@ -272,13 +275,15 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
     ) -> None:
         with self._lock:
             self._active_tool = None
+            args = self._active_tool_args or {}
+            self._active_tool_args = None
             self._active_phrase = None
             now = time.perf_counter()
             tool_dur = duration if duration > 0.0 else ((now - self._t_tool_start) if self._t_tool_start else 0.0)
             status = "ERROR" if ("error" in result.lower() and "no error" not in result.lower()) else "SUCCESS"
             self._benchmark_tracker.record_tool_execution(
                 name=tool_name,
-                arguments={},
+                arguments=args,
                 duration=tool_dur,
                 fallback=fallback,
                 server=server,

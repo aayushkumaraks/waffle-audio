@@ -586,6 +586,21 @@ class LLMProvider:
                 callbacks.on_generation_updated(generated_text)
 
             t_followup_end = time.perf_counter()
+            fu_full_dur = max(0.0, t_followup_end - t_followup_start)
+            fu_first_tok_dur = max(
+                0.0,
+                (t_followup_first_tok - t_followup_start)
+                if t_followup_first_tok is not None
+                else fu_full_dur,
+            )
+
+            # Flush content if not yet started
+            if not generation_started and generated_text.strip():
+                t_followup_first_tok = time.perf_counter()
+                callbacks.on_generation_started()
+                generation_started = True
+                callbacks.on_generation_updated(generated_text)
+
             if generation_started and not self._abort_event.is_set():
                 if is_benchmark_enabled():
                     logger.info(
