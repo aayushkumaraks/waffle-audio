@@ -48,11 +48,18 @@ class _MoonshineListenerAdapter(TranscriptEventListener):
         self._listener.on_transcript_completed(event.line.text)
 
 
+from constants import (
+    STT_LANGUAGE,
+    STT_QUEUE_SIZE,
+    STT_UPDATE_INTERVAL,
+)
+
+
 @dataclass(slots=True)
 class STTConfig:
-    language: str = "en"
-    update_interval: float = 0.5
-    queue_size: int = 200
+    language: str = STT_LANGUAGE
+    update_interval: float = STT_UPDATE_INTERVAL
+    queue_size: int = STT_QUEUE_SIZE
 
 
 class STTServiceError(Exception):

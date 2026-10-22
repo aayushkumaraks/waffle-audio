@@ -10,8 +10,11 @@ from typing import Callable
 
 from constants import (
     ASSISTANT_NAME,
+    FOLLOW_UP_WINDOW_SECONDS,
+    MAX_HISTORY_TURNS,
     SENTENCE_GATE_GAP_TIMEOUT,
     SENTENCE_GATE_QUICK_FIRE_TIMEOUT,
+    TRIGGER_MODE,
 )
 from models import Message
 
@@ -51,12 +54,12 @@ class ConversationManager(LLMListener):
         on_user_turn: Callable[[str], None] | None = None,
         gap_timeout: float = SENTENCE_GATE_GAP_TIMEOUT,
         quick_fire_timeout: float = SENTENCE_GATE_QUICK_FIRE_TIMEOUT,
-        max_history_turns: int = 8,
+        max_history_turns: int = MAX_HISTORY_TURNS,
         compactor: ContextCompactor | None = None,
-        trigger_mode: bool = False,
+        trigger_mode: bool = TRIGGER_MODE,
         assistant_name: str = ASSISTANT_NAME,
         on_user_turn_ignored: Callable[[str], None] | None = None,
-        follow_up_window_seconds: float = 15.0,
+        follow_up_window_seconds: float = FOLLOW_UP_WINDOW_SECONDS,
     ) -> None:
         self._stt = stt
         self._llm = llm

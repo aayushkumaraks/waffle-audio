@@ -4,14 +4,16 @@
 Generates a local .env configuration file before running the assistant.
 Prompts for:
   - Required user personalization (Name, Location, Timezone) WITHOUT default values.
-  - System and runtime defaults (Ollama URL, Model, Assistant Name, Voice, Microphone, Tokens) WITH fallback defaults.
+  - System and runtime defaults (Ollama URL, Model selection via API, Assistant Name, Voice, Microphone, Tokens) WITH fallback defaults.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 # ANSI colors if rich is unavailable
@@ -74,6 +76,21 @@ def _detect_best_ollama_url() -> str:
     return "http://localhost:11434"
 
 
+def _list_ollama_models(ollama_url: str) -> list[str]:
+    """Query the Ollama /api/tags endpoint to retrieve installed models."""
+    url = f"{ollama_url.rstrip('/')}/api/tags"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "WaffleSetup/1.0"})
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode("utf-8"))
+                models = [m.get("name") for m in data.get("models", []) if m.get("name")]
+                return models
+    except Exception:
+        pass
+    return []
+
+
 def _list_microphones() -> list[tuple[int | str, str]]:
     """List available audio input devices via sounddevice."""
     inputs: list[tuple[int | str, str]] = [("default", "System Default Microphone")]
@@ -99,6 +116,28 @@ def _list_voices() -> list[str]:
                 if p.stem not in voices:
                     voices.append(p.stem)
     return voices
+
+
+def _parse_existing_env(env_path: Path) -> dict[str, str]:
+    """Parse key-value pairs from an existing .env file if it exists."""
+    config: dict[str, str] = {}
+    if not env_path.is_file():
+        return config
+    try:
+        with env_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                k = k.strip()
+                v = v.strip()
+                if len(v) >= 2 and ((v[0] == '"' and v[-1] == '"') or (v[0] == "'" and v[-1] == "'")):
+                    v = v[1:-1]
+                config[k] = v
+    except Exception:
+        pass
+    return config
 
 
 def prompt_with_default(question: str, default: str, non_interactive: bool = False) -> str:
@@ -131,55 +170,157 @@ def run_setup(env_path: Path = Path(".env"), force: bool = False, non_interactiv
         print(f"{DIM}(Run with --force or pass --setup to run.sh to reconfigure){RESET}")
         return
 
+    existing = _parse_existing_env(env_path)
+
     print(f"\n{BOLD}{CYAN}======================================================================{RESET}")
     print(f"{BOLD}{CYAN}             Waffle Audio — Initial Setup & Personalization           {RESET}")
     print(f"{BOLD}{CYAN}======================================================================{RESET}\n")
-    print(f"This one-time wizard personalizes your voice assistant and configures your local environment.")
+    print(f"This wizard personalizes your voice assistant and configures your local environment.")
     print(f"Configuration will be saved to {BOLD}.env{RESET} (which is ignored by git).\n")
 
     # -------------------------------------------------------------------------
     # 1. User Personalization (NO DEFAULT VALUES)
     # -------------------------------------------------------------------------
-    print(f"{BOLD}[1/3] User Personalization (No defaults){RESET}")
+    print(f"{BOLD}[1/4] User Personalization (No defaults){RESET}")
     print(f"{DIM}Tell your assistant who it is speaking with so it can personalize responses.{RESET}")
-    user_name = prompt_without_default("  Your Name (e.g. Aayush, Alex)", non_interactive)
-    user_location = prompt_without_default("  Your Location (City, Country - e.g. New Delhi, India)", non_interactive)
-    user_timezone = prompt_without_default("  Your Timezone (e.g. Asia/Kolkata, America/New_York)", non_interactive)
+    user_name_default = existing.get("USER_NAME", "")
+    user_loc_default = existing.get("USER_LOCATION", "")
+    user_tz_default = existing.get("USER_TIMEZONE", "")
+
+    if user_name_default and not non_interactive:
+        user_name = prompt_with_default("  Your Name (e.g. Aayush, Alex)", user_name_default, non_interactive)
+    else:
+        user_name = prompt_without_default("  Your Name (e.g. Aayush, Alex)", non_interactive)
+
+    if user_loc_default and not non_interactive:
+        user_location = prompt_with_default("  Your Location (City, Country)", user_loc_default, non_interactive)
+    else:
+        user_location = prompt_without_default("  Your Location (City, Country - e.g. New Delhi, India)", non_interactive)
+
+    if user_tz_default and not non_interactive:
+        user_timezone = prompt_with_default("  Your Timezone", user_tz_default, non_interactive)
+    else:
+        user_timezone = prompt_without_default("  Your Timezone (e.g. Asia/Kolkata, America/New_York)", non_interactive)
 
     print()
 
     # -------------------------------------------------------------------------
-    # 2. Assistant & Audio Settings (WITH DEFAULT VALUES)
+    # 2. Assistant Identity & Voice Backend (WITH DEFAULT VALUES)
     # -------------------------------------------------------------------------
-    print(f"{BOLD}[2/3] Assistant & Audio Hardware (Defaults provided){RESET}")
-    assistant_name = prompt_with_default("  Assistant Name", "Waffle", non_interactive)
+    print(f"{BOLD}[2/4] Assistant Identity & Voice Engine (Defaults provided){RESET}")
+    assistant_name = prompt_with_default(
+        "  Assistant Name",
+        existing.get("ASSISTANT_NAME", "Waffle"),
+        non_interactive,
+    )
+
+    tts_backend = prompt_with_default(
+        "  TTS Backend (pocket or kokoro)",
+        existing.get("VOICECHAT_TTS_BACKEND", "pocket"),
+        non_interactive,
+    ).lower()
+    if tts_backend not in ("pocket", "kokoro"):
+        tts_backend = "pocket"
 
     # Voice selection
     available_voices = _list_voices()
     voice_desc = ", ".join(available_voices)
     print(f"  {DIM}Available voices: {voice_desc}{RESET}")
-    assistant_voice = prompt_with_default("  Assistant Voice", "anna", non_interactive)
+    default_voice = existing.get("VOICECHAT_TTS_VOICE", "anna" if tts_backend == "pocket" else "af_sarah")
+    assistant_voice = prompt_with_default("  Assistant Voice", default_voice, non_interactive)
 
-    # Microphone selection
-    mics = _list_microphones()
-    print(f"  {DIM}Detected audio inputs:{RESET}")
-    for idx_opt, desc in mics:
-        print(f"    [{idx_opt}] {desc}")
-    mic_choice = prompt_with_default("  Microphone Device (choose index or 'default')", "default", non_interactive)
+    tts_speed = prompt_with_default(
+        "  Speech Speed Multiplier (0.5 - 2.0)",
+        existing.get("VOICECHAT_TTS_SPEED", "1.0"),
+        non_interactive,
+    )
 
     print()
 
     # -------------------------------------------------------------------------
-    # 3. LLM Runtime & Tokens (WITH DEFAULT VALUES)
+    # 3. Audio Hardware & Interaction Modes (WITH DEFAULT VALUES)
     # -------------------------------------------------------------------------
-    print(f"{BOLD}[3/3] LLM Runtime & External Tokens (Defaults provided){RESET}")
-    default_ollama_url = _detect_best_ollama_url()
+    print(f"{BOLD}[3/4] Audio Hardware & Interaction Modes (Defaults provided){RESET}")
+    mics = _list_microphones()
+    print(f"  {DIM}Detected audio inputs:{RESET}")
+    for idx_opt, desc in mics:
+        print(f"    [{idx_opt}] {desc}")
+    mic_choice = prompt_with_default(
+        "  Microphone Device (choose index or 'default')",
+        existing.get("AUDIO_INPUT_DEVICE", "default"),
+        non_interactive,
+    )
+
+    trigger_mode_choice = prompt_with_default(
+        "  Trigger Mode (only respond when 'Hey <Assistant Name>' is spoken) [true/false]",
+        existing.get("VOICECHAT_TRIGGER_MODE", "false"),
+        non_interactive,
+    ).lower()
+    trigger_mode = "true" if trigger_mode_choice in ("true", "1", "yes", "y") else "false"
+
+    barge_in_choice = prompt_with_default(
+        "  Barge-In Interruption (allow interrupting assistant mid-speech) [true/false]",
+        existing.get("VOICECHAT_BARGE_IN_ENABLED", "true"),
+        non_interactive,
+    ).lower()
+    barge_in = "true" if barge_in_choice in ("true", "1", "yes", "y") else "false"
+
+    aec_choice = prompt_with_default(
+        "  Acoustic Echo Cancellation (AEC for loudspeaker playback) [true/false]",
+        existing.get("VOICECHAT_AEC_ENABLED", barge_in),
+        non_interactive,
+    ).lower()
+    aec = "true" if aec_choice in ("true", "1", "yes", "y") else "false"
+
+    print()
+
+    # -------------------------------------------------------------------------
+    # 4. LLM Runtime & Ollama Model API Selection (WITH DEFAULT VALUES)
+    # -------------------------------------------------------------------------
+    print(f"{BOLD}[4/4] LLM Runtime & Ollama Model (API-powered model discovery){RESET}")
+    default_ollama_url = existing.get("OLLAMA_BASE_URL") or _detect_best_ollama_url()
     ollama_url = prompt_with_default("  Ollama Runtime URL", default_ollama_url, non_interactive)
-    ollama_model = prompt_with_default("  Ollama Model Name", "qwen3.5:4b", non_interactive)
+
+    # Use Ollama API to discover and select available models
+    models = _list_ollama_models(ollama_url)
+    if non_interactive:
+        ollama_model = existing.get("OLLAMA_MODEL", "qwen3.5:4b")
+    else:
+        if models:
+            print(f"  {BOLD}{GREEN}✓ Connected to Ollama at {ollama_url}. Installed models found:{RESET}")
+            default_choice_idx = None
+            for idx, m_name in enumerate(models, 1):
+                is_match = (m_name == existing.get("OLLAMA_MODEL")) or (
+                    not existing.get("OLLAMA_MODEL") and (m_name == "qwen3.5:4b" or m_name.startswith("qwen3.5:4b"))
+                )
+                rec = f" {BOLD}{GREEN}(recommended){RESET}" if m_name.startswith("qwen3.5:4b") else ""
+                if is_match and default_choice_idx is None:
+                    default_choice_idx = idx
+                print(f"    [{idx}] {m_name}{rec}")
+
+            def_str = str(default_choice_idx) if default_choice_idx is not None else "1"
+            choice = prompt_with_default(
+                f"  Select model (1-{len(models)} or type custom model name)",
+                def_str,
+                non_interactive=False,
+            )
+            if choice.isdigit() and 1 <= int(choice) <= len(models):
+                ollama_model = models[int(choice) - 1]
+            elif choice:
+                ollama_model = choice
+            else:
+                ollama_model = models[0]
+        else:
+            print(f"  {DIM}(Could not query models automatically from {ollama_url}/api/tags; entering manually){RESET}")
+            ollama_model = prompt_with_default(
+                "  Ollama Model Name",
+                existing.get("OLLAMA_MODEL", "qwen3.5:4b"),
+                non_interactive=False,
+            )
 
     github_token = prompt_with_default(
         "  GitHub Personal Access Token (for GitHub MCP tool, optional)",
-        "",
+        existing.get("GITHUB_PERSONAL_ACCESS_TOKEN", ""),
         non_interactive,
     )
 
@@ -198,17 +339,34 @@ USER_TIMEZONE="{user_timezone}"
 
 # Assistant Identity & Voice (Defaults provided)
 ASSISTANT_NAME="{assistant_name}"
+VOICECHAT_TTS_BACKEND="{tts_backend}"
 VOICECHAT_TTS_VOICE="{assistant_voice}"
+VOICECHAT_TTS_SPEED="{tts_speed}"
 
 # Audio Hardware (Defaults provided)
 AUDIO_INPUT_DEVICE="{mic_choice}"
 AUDIO_OUTPUT_DEVICE="default"
 
+# Interaction Modes & Audio Processing (Defaults provided)
+VOICECHAT_TRIGGER_MODE="{trigger_mode}"
+VOICECHAT_BARGE_IN_ENABLED="{barge_in}"
+VOICECHAT_AEC_ENABLED="{aec}"
+
 # LLM & Ollama Runtime (Defaults provided)
 OLLAMA_BASE_URL="{ollama_url}"
 OLLAMA_MODEL="{ollama_model}"
+OLLAMA_KEEP_ALIVE="{existing.get('OLLAMA_KEEP_ALIVE', '30m')}"
+OLLAMA_NUM_PREDICT="{existing.get('OLLAMA_NUM_PREDICT', '160')}"
+OLLAMA_NUM_CTX="{existing.get('OLLAMA_NUM_CTX', '2048')}"
 
-# External Tokens & Tools (Defaults provided)
+# Conversation & Compactor (Defaults provided)
+VOICECHAT_MAX_HISTORY_TURNS="{existing.get('VOICECHAT_MAX_HISTORY_TURNS', '8')}"
+VOICECHAT_COMPACTOR_ENABLED="{existing.get('VOICECHAT_COMPACTOR_ENABLED', 'true')}"
+VOICECHAT_COMPACTOR_MAX_TURNS="{existing.get('VOICECHAT_COMPACTOR_MAX_TURNS', '6')}"
+
+# Tools & External Tokens (Defaults provided)
+VOICECHAT_TOOLS_ENABLED="{existing.get('VOICECHAT_TOOLS_ENABLED', 'true')}"
+VOICECHAT_DDGS_ENABLED="{existing.get('VOICECHAT_DDGS_ENABLED', 'true')}"
 GITHUB_PERSONAL_ACCESS_TOKEN="{github_token}"
 """
 

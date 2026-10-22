@@ -5,18 +5,24 @@ from dataclasses import dataclass
 from typing import TypeAlias
 import numpy as np
 import numpy.typing as npt
-from constants import KOKORO_MODEL_PATH, KOKORO_VOICES_PATH, TTS_QUANTIZE
+from constants import (
+    KOKORO_MODEL_PATH,
+    KOKORO_VOICES_PATH,
+    TTS_QUANTIZE,
+    TTS_QUEUE_SIZE,
+    TTS_SPEED,
+)
 AudioBuffer: TypeAlias = npt.NDArray[np.float32]
 @dataclass(slots=True)
 class TTSConfig:
     backend: str | None = None
     voice: str | None = None
     language: str | None = None
-    speed: float = 1.0
+    speed: float = TTS_SPEED
     quantize: bool = TTS_QUANTIZE
     model_path: str = KOKORO_MODEL_PATH
     voices_path: str = KOKORO_VOICES_PATH
-    queue_size: int = 16
+    queue_size: int = TTS_QUEUE_SIZE
 class TTSListener(ABC):
     @abstractmethod
     def on_synthesis_started(self) -> None: ...

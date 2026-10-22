@@ -56,6 +56,17 @@ def _int_from_env(name: str, default: int) -> int:
     except ValueError as exc:
         raise ValueError(f"Environment variable {name} must be an integer.") from exc
 
+
+def _float_from_env(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ValueError(f"Environment variable {name} must be a float.") from exc
+
 # ---------------------------------------------------------------------------
 # Personalization & User Identity (Loaded from .env or empty defaults)
 # ---------------------------------------------------------------------------
@@ -127,11 +138,37 @@ CONTEXT_COMPACTOR_USE_LLM: bool = os.getenv("VOICECHAT_COMPACTOR_USE_LLM", "fals
 
 
 # ---------------------------------------------------------------------------
+# Conversation Limits & Follow-up Window
+# ---------------------------------------------------------------------------
+
+VOICECHAT_MAX_HISTORY_TURNS: int = _int_from_env("VOICECHAT_MAX_HISTORY_TURNS", 8)
+MAX_HISTORY_TURNS: int = VOICECHAT_MAX_HISTORY_TURNS
+VOICECHAT_FOLLOW_UP_WINDOW: float = _float_from_env("VOICECHAT_FOLLOW_UP_WINDOW", 15.0)
+FOLLOW_UP_WINDOW_SECONDS: float = VOICECHAT_FOLLOW_UP_WINDOW
+
+# ---------------------------------------------------------------------------
 # Sentence Gate (silence interval before LLM invocation)
 # ---------------------------------------------------------------------------
 
-SENTENCE_GATE_GAP_TIMEOUT: float = float(os.getenv("VOICECHAT_GAP_TIMEOUT", "0.5"))
-SENTENCE_GATE_QUICK_FIRE_TIMEOUT: float = float(os.getenv("VOICECHAT_QUICK_FIRE_TIMEOUT", "0.25"))
+SENTENCE_GATE_GAP_TIMEOUT: float = _float_from_env("VOICECHAT_GAP_TIMEOUT", 0.5)
+SENTENCE_GATE_QUICK_FIRE_TIMEOUT: float = _float_from_env("VOICECHAT_QUICK_FIRE_TIMEOUT", 0.25)
+
+# ---------------------------------------------------------------------------
+# Voice Activity Detection (Silero VAD)
+# ---------------------------------------------------------------------------
+
+VAD_THRESHOLD: float = _float_from_env("VOICECHAT_VAD_THRESHOLD", 0.5)
+VAD_MIN_SILENCE_MS: int = _int_from_env("VOICECHAT_VAD_MIN_SILENCE_MS", 200)
+VAD_SPEECH_PAD_MS: int = _int_from_env("VOICECHAT_VAD_SPEECH_PAD_MS", 100)
+VAD_PRE_SPEECH_PAD_MS: int = _int_from_env("VOICECHAT_VAD_PRE_SPEECH_PAD_MS", 200)
+
+# ---------------------------------------------------------------------------
+# Speech-To-Text (Moonshine STT)
+# ---------------------------------------------------------------------------
+
+STT_LANGUAGE: str = os.getenv("VOICECHAT_STT_LANGUAGE", "en").strip() or "en"
+STT_UPDATE_INTERVAL: float = _float_from_env("VOICECHAT_STT_UPDATE_INTERVAL", 0.5)
+STT_QUEUE_SIZE: int = _int_from_env("VOICECHAT_STT_QUEUE_SIZE", 200)
 
 # ---------------------------------------------------------------------------
 # Barge-in / echo cancellation (experimental, opt-in)
@@ -189,6 +226,8 @@ CLONED_VOICES_DIR: Path = Path(os.getenv("VOICECHAT_CLONED_VOICES_DIR", "cloned_
 TTS_QUANTIZE: bool = os.getenv("VOICECHAT_TTS_QUANTIZE", "false").lower() in {
     "1", "true", "yes", "on"
 }
+TTS_SPEED: float = _float_from_env("VOICECHAT_TTS_SPEED", 1.0)
+TTS_QUEUE_SIZE: int = _int_from_env("VOICECHAT_TTS_QUEUE_SIZE", 16)
 
 
 def list_cloned_voices(directory: Path | str | None = None) -> list[str]:

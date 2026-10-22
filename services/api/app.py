@@ -9,14 +9,12 @@ import wave
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Literal
 
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from constants import (
@@ -376,11 +374,6 @@ def trigger_barge_in() -> dict[str, str]:
 @app.get("/audio/status")
 def audio_status() -> dict[str, bool]:
     return {"is_playing": runtime.player.is_playing}
-
-
-_WEBAPP_DIR = Path(__file__).resolve().parent.parent.parent / "tools" / "webapp"
-if _WEBAPP_DIR.is_dir():
-    app.mount("/ui", StaticFiles(directory=_WEBAPP_DIR, html=True), name="webapp")
 
 
 def main() -> None:

@@ -43,5 +43,11 @@ def __getattr__(name: str) -> Any:
         val = getattr(module, attr_name)
         globals()[name] = val
         return val
+    try:
+        submod = importlib.import_module(f".{name}", __name__)
+        globals()[name] = submod
+        return submod
+    except ModuleNotFoundError:
+        pass
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

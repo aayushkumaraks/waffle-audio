@@ -71,6 +71,65 @@ class TestSetupWizard(unittest.TestCase):
         content = self.env_file.read_text(encoding="utf-8")
         self.assertEqual(content, "CUSTOM_KEY=custom_value\n")
 
+    @patch("urllib.request.urlopen")
+    def test_list_ollama_models_success(self, mock_urlopen) -> None:
+        import io
+        mock_response = io.BytesIO(b'{"models": [{"name": "qwen3.5:4b"}, {"name": "llama3:latest"}]}')
+        mock_response.status = 200
+        mock_urlopen.return_value.__enter__.return_value = mock_response
+
+        models = setup._list_ollama_models("http://localhost:11434")
+        self.assertEqual(models, ["qwen3.5:4b", "llama3:latest"])
+
+    @patch("urllib.request.urlopen", side_effect=Exception("Connection refused"))
+    def test_list_ollama_models_handles_error(self, mock_urlopen) -> None:
+        models = setup._list_ollama_models("http://localhost:11434")
+        self.assertEqual(models, [])
+
+    @patch("setup._list_ollama_models", return_value=["qwen3.5:4b", "gemma4:e4b"])
+    @patch("builtins.input", side_effect=[
+        "",           # User name
+        "",           # User location
+        "",           # User timezone
+        "",           # Assistant name (default: Waffle)
+        "",           # TTS Backend (default: pocket)
+        "",           # Voice (default: anna)
+        "",           # Speed (default: 1.0)
+        "",           # Mic (default: default)
+        "",           # Trigger mode (default: false)
+        "",           # Barge in (default: true)
+        "",           # AEC (default: true)
+        "",           # Ollama url (default)
+        "2",          # Model selection: index 2 -> gemma4:e4b
+        "",           # GitHub token
+    ])
+    def test_interactive_model_selection_from_api_list(self, mock_input, mock_models) -> None:
+        setup.run_setup(env_path=self.env_file, force=True, non_interactive=False)
+        content = self.env_file.read_text(encoding="utf-8")
+        self.assertIn('OLLAMA_MODEL="gemma4:e4b"', content)
+
+    @patch("setup._list_ollama_models", return_value=["qwen3.5:4b"])
+    @patch("builtins.input", side_effect=[
+        "",           # User name
+        "",           # User location
+        "",           # User timezone
+        "",           # Assistant name
+        "",           # TTS Backend
+        "",           # Voice
+        "",           # Speed
+        "",           # Mic
+        "",           # Trigger mode
+        "",           # Barge in
+        "",           # AEC
+        "",           # Ollama url
+        "custom_mistral:7b",  # Model selection: custom name
+        "",           # GitHub token
+    ])
+    def test_interactive_model_selection_custom_name(self, mock_input, mock_models) -> None:
+        setup.run_setup(env_path=self.env_file, force=True, non_interactive=False)
+        content = self.env_file.read_text(encoding="utf-8")
+        self.assertIn('OLLAMA_MODEL="custom_mistral:7b"', content)
+
 
 class TestEnvLoadingAndPersonalization(unittest.TestCase):
     def setUp(self) -> None:

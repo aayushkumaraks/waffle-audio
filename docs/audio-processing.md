@@ -4,10 +4,10 @@ The audio-processing layer is organized around independent capabilities rather t
 
 ## Pipeline boundary
 
-Browser microphone audio is converted to 16 kHz mono PCM and passed through preprocessing before reaching STT.
+Microphone audio is converted to 16 kHz mono PCM and passed through preprocessing before reaching STT.
 
 ```text
-WebRTC microphone
+Microphone (PortAudio / WebRTC)
     |
     v
 VAD

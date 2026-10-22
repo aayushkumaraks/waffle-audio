@@ -7,6 +7,13 @@ from typing import Protocol
 import numpy as np
 import numpy.typing as npt
 
+from constants import (
+    VAD_MIN_SILENCE_MS,
+    VAD_PRE_SPEECH_PAD_MS,
+    VAD_SPEECH_PAD_MS,
+    VAD_THRESHOLD,
+)
+
 AudioBuffer = npt.NDArray[np.float32]
 
 
@@ -40,10 +47,10 @@ class VADConfig:
 
     enabled: bool = True
     sample_rate: int = 16_000
-    threshold: float = 0.5
-    min_silence_duration_ms: int = 200
-    speech_pad_ms: int = 100
-    pre_speech_padding_ms: int = 200
+    threshold: float = VAD_THRESHOLD
+    min_silence_duration_ms: int = VAD_MIN_SILENCE_MS
+    speech_pad_ms: int = VAD_SPEECH_PAD_MS
+    pre_speech_padding_ms: int = VAD_PRE_SPEECH_PAD_MS
     frame_samples: int = 512
 
 
