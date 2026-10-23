@@ -220,7 +220,8 @@ def clone_voice(
     play_sample: bool = True,
 ) -> Path:
     """Extract voice characteristics from audio and export to .safetensors embedding."""
-    from pocket_tts import TTSModel, export_model_state
+    with _Spinner("Please wait! Initializing voice cloning package..."):
+        from pocket_tts import TTSModel, export_model_state
 
     audio_path = Path(audio_path).resolve()
     if not audio_path.is_file():
