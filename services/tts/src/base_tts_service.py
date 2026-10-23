@@ -25,15 +25,32 @@ class BaseTTSService(ABC):
     def _change_pending(self, delta: int) -> None:
         with self._pending_lock: self._pending = max(0, self._pending + delta)
     def start(self) -> None:
-        if self._started: raise ServiceAlreadyStarted("TTSService is already started.")
-        self._load_engine(); self._started = True
-        self._worker_thread = threading.Thread(target=self._process_speech_queue, name="tts-worker", daemon=True); self._worker_thread.start()
+        if self._started:
+            raise ServiceAlreadyStarted("TTSService is already started.")
+        logger.info("Starting %s engine...", self.__class__.__name__)
+        t0 = time.perf_counter()
+        self._load_engine()
+        self._started = True
+        logger.info("%s engine started successfully in %.2fs.", self.__class__.__name__, time.perf_counter() - t0)
+        self._worker_thread = threading.Thread(
+            target=self._process_speech_queue, name="tts-worker", daemon=True
+        )
+        self._worker_thread.start()
+
     def stop(self) -> None:
-        if not self._started: raise ServiceNotStarted("TTSService is not started.")
-        try: self._speech_queue.put_nowait(_STOP)
-        except queue.Full: pass
-        if self._worker_thread: self._worker_thread.join(timeout=5)
-        self._worker_thread = None; self._unload_engine(); self._started = False
+        if not self._started:
+            raise ServiceNotStarted("TTSService is not started.")
+        logger.info("Stopping %s engine...", self.__class__.__name__)
+        try:
+            self._speech_queue.put_nowait(_STOP)
+        except queue.Full:
+            pass
+        if self._worker_thread:
+            self._worker_thread.join(timeout=5)
+        self._worker_thread = None
+        self._unload_engine()
+        self._started = False
+        logger.info("%s engine stopped.", self.__class__.__name__)
     def speak(self, text: str) -> None:
         if not self._started: raise ServiceNotStarted("TTSService is not started.")
         self._change_pending(1)

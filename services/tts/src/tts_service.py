@@ -1,9 +1,9 @@
 """Feature-flagged TTS factory used by the rest of the application."""
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
-import constants
 from constants import TTS_BACKEND
 from .tts_types import (
     AudioBuffer,
@@ -19,6 +19,9 @@ if TYPE_CHECKING:
     from .kokoro_tts_service import KokoroTTSService
     from .pocket_tts_service import PocketTTSService
 
+logger = logging.getLogger(__name__)
+
+
 def _normalize_backend(name: str | None) -> str:
     """Normalize backend identifier to 'pocket' or 'kokoro', defaulting to 'pocket'."""
     val = (name or "").strip().lower()
@@ -27,14 +30,6 @@ def _normalize_backend(name: str | None) -> str:
     if val in {"pocket", "pockettts", "pocket_tts"}:
         return "pocket"
     return "pocket" if not val else val
-
-# Determine backend from constants.py, defaulting to pocket
-_ACTIVE_BACKEND = _normalize_backend(getattr(constants, "TTS_BACKEND", TTS_BACKEND))
-
-if _ACTIVE_BACKEND == "kokoro":
-    from .kokoro_tts_service import KokoroTTSService  # type: ignore[assignment]
-else:
-    from .pocket_tts_service import PocketTTSService  # type: ignore[assignment]
 
 
 class TTSService:
@@ -47,11 +42,21 @@ class TTSService:
     def __new__(cls, config: TTSConfig | None = None) -> Any:
         config = config or TTSConfig()
         backend = _normalize_backend(config.backend or TTS_BACKEND)
+        logger.info(
+            "Initializing TTS service (backend: '%s', voice: '%s', language: '%s')...",
+            backend,
+            config.voice or "default",
+            config.language or "default",
+        )
         if backend == "kokoro":
+            logger.info("Conditionally loading KokoroTTSService backend...")
             from .kokoro_tts_service import KokoroTTSService
+
             return KokoroTTSService(config)
         if backend == "pocket":
+            logger.info("Conditionally loading PocketTTSService backend...")
             from .pocket_tts_service import PocketTTSService
+
             return PocketTTSService(config)
         raise ValueError(f"TTS backend must be 'pocket' or 'kokoro', got '{backend}'.")
 
@@ -59,10 +64,14 @@ class TTSService:
 def __getattr__(name: str) -> Any:
     """Lazy export of individual backend service classes if requested directly."""
     if name == "KokoroTTSService":
+        logger.info("Conditionally loading KokoroTTSService via module attribute access...")
         from .kokoro_tts_service import KokoroTTSService
+
         return KokoroTTSService
     if name == "PocketTTSService":
+        logger.info("Conditionally loading PocketTTSService via module attribute access...")
         from .pocket_tts_service import PocketTTSService
+
         return PocketTTSService
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 

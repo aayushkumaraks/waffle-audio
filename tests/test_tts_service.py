@@ -96,6 +96,22 @@ class TestTTSServiceFactory(unittest.TestCase):
         with self.assertRaises(AttributeError):
             getattr(tts_module, "FakeTTSService")
 
+    def test_package_dynamic_getattr(self) -> None:
+        """services.tts exposes KokoroTTSService and PocketTTSService dynamically."""
+        import services.tts as tts_pkg
+
+        self.assertIsNotNone(getattr(tts_pkg, "KokoroTTSService"))
+        self.assertIsNotNone(getattr(tts_pkg, "PocketTTSService"))
+        with self.assertRaises(AttributeError):
+            getattr(tts_pkg, "FakeTTSService")
+
+    def test_factory_logging(self) -> None:
+        """TTSService logs backend initialization details."""
+        with self.assertLogs("services.tts.src.tts_service", level="INFO") as cm:
+            TTSService(TTSConfig(backend="pocket", voice="test_voice"))
+        self.assertTrue(any("Initializing TTS service" in msg for msg in cm.output))
+        self.assertTrue(any("Conditionally loading PocketTTSService" in msg for msg in cm.output))
+
 
 class TestBaseTTSService(unittest.TestCase):
     def setUp(self) -> None:
