@@ -282,14 +282,18 @@ class LLMProvider:
         """
         self._abort_event.clear()
 
+        has_tool_intent = (
+            self._config.tools_enabled
+            and self._guess_tool_intent(messages)
+        )
         tools = (
             self._tool_manager.get_ollama_tools()
-            if self._config.tools_enabled
+            if has_tool_intent
             else []
         )
         sys_prompt = (
             self._build_tool_system_prompt(**self._get_persona_kwargs())
-            if self._config.tools_enabled
+            if has_tool_intent
             else self._build_default_system_prompt(**self._get_persona_kwargs())
         )
         payload = self._build_request(messages, tools=tools, system_prompt=sys_prompt)
@@ -351,7 +355,7 @@ class LLMProvider:
         collected_content = ""
         generation_started = False
         has_tools_config = bool(payload.get("tools"))
-        buffer_threshold = 80 if has_tools_config else 0
+        buffer_threshold = 40 if has_tools_config else 0
         t_start = time.perf_counter()
         t_first_tok: float | None = None
 
@@ -388,8 +392,12 @@ class LLMProvider:
                 if content:
                     collected_content += content
 
-                    # Only stream to speech if tools are not configured in payload
-                    if not has_tools_config and not tool_calls:
+                    # Stream tokens if no tool calls were emitted and not stalling
+                    can_stream = (not has_tools_config) or (
+                        len(collected_content) >= buffer_threshold
+                        and not self._should_fallback_to_ddg_search(payload.get("messages", []), collected_content)
+                    )
+                    if can_stream and not tool_calls:
                         if not generation_started:
                             t_first_tok = time.perf_counter()
                             callbacks.on_generation_started()
