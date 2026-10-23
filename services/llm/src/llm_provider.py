@@ -519,8 +519,13 @@ class LLMProvider:
                     }
                 )
 
-            # Check if we should allow another round of tool calling or finalize
-            is_last_round = (round_idx + 1 >= max_rounds)
+            # Only provide tools for subsequent rounds if a preparatory tool (e.g. geocoding) was executed
+            chainable_tools = {"geocode_location", "batch_geocode_locations"}
+            needs_further_tool = any(
+                call.get("function", {}).get("name") in chainable_tools
+                for call in current_tool_calls
+            )
+            is_last_round = (round_idx + 1 >= max_rounds) or not needs_further_tool
             raw_tools = (
                 self._tool_manager.get_ollama_tools()
                 if (not is_last_round and self._config.tools_enabled)
@@ -728,46 +733,34 @@ class LLMProvider:
 
         return tool_calls
 
+    _STALLING_PATTERN = re.compile(
+        r"\b(?:"
+        r"let\s+me\s+(?:(?:\w+)\s+)?(?:check|find|look|get|see|search|pull|grab|give|provide|fetch|share|tell)\b|"
+        r"(?:i\s*['’]?ll|i\s+will|i\s+can)\s+(?:(?:\w+)\s+)?(?:check|look|get|find|see|search|pull|grab|give|provide|fetch|share|tell|help\s+you)\b|"
+        r"(?:give|allow)\s+(?:me\s+)?(?:just\s+)?(?:a\s+)?(?:moment|sec|second|minute)\b|"
+        r"(?:be\s+with\s+you\s+in\s+(?:just\s+)?a\s+moment)\b|"
+        r"(?:searching|looking\s+up|checking)\s+(?:for|into|the|now)\b|"
+        r"duckduckgo[,\s]+(?:fetch|search|find|query)\b|"
+        r"hold\s+on\b|"
+        r"moment\s+to\s+check\b|"
+        r"don['’]?t\s+have\s+(?:access\s+to\s+)?(?:real-?time|live|current)\b|"
+        r"do\s+not\s+have\s+(?:access\s+to\s+)?(?:real-?time|live|current)\b|"
+        r"cannot\s+browse|can['’]?t\s+browse|unable\s+to\s+browse\b|"
+        r"my\s+knowledge\s+cutoff\b|"
+        r"as\s+an\s+ai\b|"
+        r"stop\s+nagging\b"
+        r")",
+        re.IGNORECASE,
+    )
+
     def _should_fallback_to_ddg_search(
         self, messages: Sequence[Message] | Sequence[dict[str, Any]], assistant_text: str
     ) -> bool:
-        """Detect if the assistant replied with refusal, stalling, or pretending to search."""
+        """Detect if the assistant replied with refusal, stalling, or promising to check without executing."""
         if not messages or not assistant_text:
             return False
 
-        asst = assistant_text.lower()
-        refusal_and_stalling_phrases = [
-            "don't have access to real-time",
-            "do not have access to real-time",
-            "cannot browse the internet",
-            "can't browse the internet",
-            "no access to current",
-            "no access to real-time",
-            "cannot access real-time",
-            "can't access real-time",
-            "my knowledge cutoff",
-            "as of my knowledge cutoff",
-            "as an ai, i don't have access to live",
-            "as an ai, i do not have access to live",
-            "as an ai, i cannot provide real-time",
-            "do not have live information",
-            "don't have live information",
-            "unable to browse",
-            "duckduckgo, fetch",
-            "duckduckgo, search",
-            "let me check the weather",
-            "let me find out what the weather",
-            "let me quickly check",
-            "let me check the current weather",
-            "let me look that up",
-            "searching for",
-            "looking up",
-            "give it a second",
-            "please give me a moment",
-            "stop nagging and maybe i'll give you an actual answer",
-            "look up the latest news",
-        ]
-        return any(phrase in asst for phrase in refusal_and_stalling_phrases)
+        return bool(self._STALLING_PATTERN.search(assistant_text))
 
     @classmethod
     def _extract_fallback_query(
