@@ -70,7 +70,7 @@ uv run python -m services.conversation.cli
 # Enable structured JSONL latency tracking and session averages
 ./run.sh --benchmark
 
-# Wake phrase mode: only responds when "Hey Waffle" is spoken
+# Wake phrase mode: only responds when "Hey [ASSISTANT_NAME]" is spoken
 ./run.sh --trigger-mode
 
 # Launch with a specific custom or cloned voice
