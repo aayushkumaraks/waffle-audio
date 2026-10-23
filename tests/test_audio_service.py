@@ -121,6 +121,50 @@ class TestAudioPlayer(unittest.TestCase):
         self.player.interrupt()
         self.assertFalse(self.player.is_playing)
 
+    def test_post_interrupt_chunk_is_not_dropped(self) -> None:
+        """When interrupt() is called, any chunk arriving for the subsequent turn (e.g. tool filler) is played."""
+        written_chunks: list[np.ndarray] = []
+
+        class MockStream:
+            def __init__(self, **kwargs):
+                self.stopped = False
+            def start(self):
+                self.stopped = False
+            def stop(self):
+                self.stopped = True
+            def close(self):
+                self.stopped = True
+            def write(self, data):
+                written_chunks.append(data.copy())
+
+        with patch("sounddevice.OutputStream", MockStream):
+            self.player.start()
+
+            # First turn chunk
+            self.player.on_audio_chunk(np.ones(2048, dtype=np.float32), 24000, "turn 1")
+            time.sleep(0.03)
+
+            # Barge-in happens
+            self.player.interrupt()
+            time.sleep(0.02)
+
+            # Subsequent turn arrives (e.g. tool filler phrase)
+            self.player.on_synthesis_started()
+            self.player.on_audio_chunk(np.full(1024, 5.0, dtype=np.float32), 24000, "filler phrase")
+            self.player.on_synthesis_completed()
+
+            # Allow playback worker to process
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                if any(np.isclose(c[0, 0], 5.0) for c in written_chunks):
+                    break
+                time.sleep(0.02)
+
+            self.assertTrue(
+                any(np.isclose(c[0, 0], 5.0) for c in written_chunks),
+                "Subsequent turn chunk (value 5.0) was incorrectly discarded after interrupt!",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -158,7 +158,9 @@ class AudioPlayer(TTSListener):
         self._worker_thread = None
 
     def on_synthesis_started(self) -> None:
-        self._synthesizing.set()
+        with self._state_lock:
+            self._interrupted.clear()
+            self._synthesizing.set()
 
     def on_audio_chunk(
         self,
@@ -166,6 +168,8 @@ class AudioPlayer(TTSListener):
         sample_rate: int,
         text: str = "",
     ) -> None:
+        with self._state_lock:
+            self._interrupted.clear()
         self._playback_queue.put_nowait((audio, sample_rate, text))
 
     def on_synthesis_completed(self) -> None:
@@ -209,9 +213,7 @@ class AudioPlayer(TTSListener):
                     text = ""
 
                 with self._state_lock:
-                    if self._interrupted.is_set():
-                        self._interrupted.clear()
-                        continue
+                    self._interrupted.clear()
                     self._turn_active = True
                     self._playing.set()
                     text = text.strip()
@@ -224,7 +226,10 @@ class AudioPlayer(TTSListener):
                 try:
                     if stream is None or stream_rate != sample_rate:
                         if stream is not None:
-                            stream.close()
+                            try:
+                                stream.close()
+                            except Exception:
+                                pass
                             stream = None
                         stream = sd.OutputStream(
                             samplerate=sample_rate,
@@ -235,6 +240,23 @@ class AudioPlayer(TTSListener):
                         )
                         stream.start()
                         stream_rate = sample_rate
+                    elif stream.stopped:
+                        try:
+                            stream.start()
+                        except Exception:
+                            try:
+                                stream.close()
+                            except Exception:
+                                pass
+                            stream = sd.OutputStream(
+                                samplerate=sample_rate,
+                                channels=2,
+                                dtype="float32",
+                                blocksize=512,
+                                device=AUDIO_OUTPUT_DEVICE,
+                            )
+                            stream.start()
+                            stream_rate = sample_rate
 
                     self._dispatch_playback_started()
                     self._dispatch_playback_monitor(audio, sample_rate)
@@ -244,6 +266,16 @@ class AudioPlayer(TTSListener):
                     stereo = np.column_stack((audio, audio)).astype(np.float32, copy=False)
                     for start in range(0, len(stereo), self._WRITE_SLICE):
                         if self._interrupted.is_set():
+                            if stream is not None:
+                                try:
+                                    stream.stop()
+                                except Exception:
+                                    try:
+                                        stream.close()
+                                    except Exception:
+                                        pass
+                                    stream = None
+                                    stream_rate = None
                             break  # interrupted mid-chunk
                         stream.write(stereo[start:start + self._WRITE_SLICE])
 
@@ -258,11 +290,17 @@ class AudioPlayer(TTSListener):
                     stream = None
                     stream_rate = None
                 finally:
+                    with self._state_lock:
+                        if self._interrupted.is_set():
+                            self._interrupted.clear()
                     self._playing.clear()
                     self._maybe_complete_turn()
         finally:
             if stream is not None:
-                stream.close()
+                try:
+                    stream.close()
+                except Exception:
+                    pass
 
     def _dispatch_playback_monitor(self, audio: AudioBuffer, sample_rate: int) -> None:
         for cb in tuple(self._monitor_callbacks):

@@ -389,8 +389,8 @@ class LLMProvider:
                 if content:
                     collected_content += content
 
-                    # Only stream to speech if no tool calls have appeared and buffer threshold is met
-                    if not tool_calls and len(collected_content) >= buffer_threshold:
+                    # Only stream to speech if tools are not configured in payload
+                    if not has_tools_config and not tool_calls:
                         if not generation_started:
                             t_first_tok = time.perf_counter()
                             callbacks.on_generation_started()

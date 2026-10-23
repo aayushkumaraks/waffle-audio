@@ -356,6 +356,8 @@ class ConversationManager(LLMListener):
                     }
                 }
             )
+            self._partial_reply = ""
+        self._chunker.reset()
 
     def on_tool_completed(
         self,
@@ -429,6 +431,7 @@ class ConversationManager(LLMListener):
         """Instantly interrupt assistant speech and ongoing LLM generation."""
         logger.info("Barge-in: interrupting LLM generation and flushing TTS/audio.")
         self._compactor.abort()
+        self._gate.cancel()
         with self._state_lock:
             was_pending = self._pending_generation
             self._pending_generation = False
