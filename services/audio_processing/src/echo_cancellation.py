@@ -100,6 +100,12 @@ class AcousticEchoCanceller:
                 ref_slice = self._ref_buffer[:n_samples].copy()
                 self._ref_buffer = self._ref_buffer[n_samples:]
 
+        if np.max(np.abs(ref_slice)) < 1e-5:
+            with self._lock:
+                self._weights *= (self._config.leakage ** n_samples)
+                self._ref_history.clear()
+            return resample_audio(mic_16k, self._config.sample_rate, sample_rate)
+
         # Run adaptive NLMS filter
         cleaned = np.zeros(n_samples, dtype=np.float32)
         eps = 1e-6

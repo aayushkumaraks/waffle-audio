@@ -156,6 +156,30 @@ class TestBargeInController(unittest.TestCase):
         ctrl.trigger_barge_in()
         self.llm.abort.assert_called_once()
 
+    def test_check_interruption_filters_faint_echo(self) -> None:
+        """Low energy audio below min_rms does not trigger barge in while playing."""
+        self.player.is_playing = True
+        self.controller._grace_period_seconds = 0.0  # bypass grace period for test
+        faint_echo = np.full(512, 0.005, dtype=np.float32)  # RMS = 0.005 < 0.025
+        self.assertFalse(self.controller.check_interruption(faint_echo))
+        self.player.interrupt.assert_not_called()
+
+    def test_check_interruption_triggers_on_loud_speech(self) -> None:
+        """High energy audio with consecutive confirmation triggers barge in."""
+        self.player.is_playing = True
+        self.controller._grace_period_seconds = 0.0
+        self.controller._consecutive_frames = 2
+        loud_speech = np.full(512, 0.08, dtype=np.float32)  # RMS = 0.08 >= 0.025
+
+        # Frame 1: counts 1, not yet confirmed
+        self.assertFalse(self.controller.check_interruption(loud_speech))
+        self.player.interrupt.assert_not_called()
+
+        # Frame 2: counts 2, confirmed and triggers!
+        self.assertTrue(self.controller.check_interruption(loud_speech))
+        self.player.interrupt.assert_called_once()
+        self.manager.barge_in.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

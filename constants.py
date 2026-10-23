@@ -184,6 +184,9 @@ _TRUTHY = {"1", "true", "yes", "on"}
 
 BARGE_IN_ENABLED: bool = os.getenv("VOICECHAT_BARGE_IN_ENABLED", "true").lower() in _TRUTHY
 AEC_ENABLED: bool = os.getenv("VOICECHAT_AEC_ENABLED", "true").lower() in _TRUTHY
+BARGE_IN_MIN_RMS: float = _float_from_env("VOICECHAT_BARGE_IN_MIN_RMS", 0.025)
+BARGE_IN_CONSECUTIVE_FRAMES: int = _int_from_env("VOICECHAT_BARGE_IN_CONSECUTIVE_FRAMES", 2)
+
 
 # ---------------------------------------------------------------------------
 # Kokoro TTS -- local model files

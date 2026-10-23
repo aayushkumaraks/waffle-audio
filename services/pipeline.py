@@ -7,6 +7,7 @@ directly in memory without network or JSON serialization overhead.
 
 from __future__ import annotations
 
+from collections import deque
 import logging
 from typing import Any, Callable, Optional
 
@@ -98,6 +99,7 @@ class UnifiedPipeline:
         # Feed audio player playback monitor to AEC reference input
         self.player.add_playback_monitor(self.echo_canceller.feed_reference)
 
+        self._pre_barge_in: deque[AudioBuffer] = deque(maxlen=8)
         self._started = False
 
     def start(self) -> None:
@@ -153,14 +155,26 @@ class UnifiedPipeline:
             cleaned_audio = resample_audio(cleaned_audio, sample_rate, 16000)
             sample_rate = 16000
 
-        # 2. Voice Activity Detection (monitors speech start/end for barge-in)
-        self.vad.process(cleaned_audio, sample_rate)
+        is_playing = getattr(self.player, "is_playing", False)
+        self.barge_in_controller.feed_audio(cleaned_audio)
 
-        # 3. Moonshine STT (requires continuous audio including silence to finalize lines)
-        try:
-            self.stt.push(cleaned_audio, sample_rate)
-        except AudioQueueFull:
-            pass
+        if is_playing:
+            self._pre_barge_in.append(cleaned_audio)
+            self.vad.process(cleaned_audio, sample_rate)
+            if self.vad.is_speech and self.barge_in_controller.check_interruption(cleaned_audio):
+                for chunk in list(self._pre_barge_in):
+                    try:
+                        self.stt.push(chunk, sample_rate)
+                    except AudioQueueFull:
+                        pass
+                self._pre_barge_in.clear()
+        else:
+            self._pre_barge_in.clear()
+            self.vad.process(cleaned_audio, sample_rate)
+            try:
+                self.stt.push(cleaned_audio, sample_rate)
+            except AudioQueueFull:
+                pass
 
     def barge_in(self) -> None:
         """Manually trigger barge-in interruption."""

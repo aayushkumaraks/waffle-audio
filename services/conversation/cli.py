@@ -108,6 +108,7 @@ def main() -> None:
     tts = None
     player = None
     stream = None
+    mic_queue = None
     ui = None
     Live = None
     README_TARGET_E2E = 2.10
@@ -131,7 +132,9 @@ def main() -> None:
             AEC_ENABLED,
             ASSISTANT_NAME,
             AUDIO_INPUT_DEVICE,
+            BARGE_IN_CONSECUTIVE_FRAMES,
             BARGE_IN_ENABLED,
+            BARGE_IN_MIN_RMS,
             OLLAMA_MODEL,
             TRIGGER_MODE,
         )
@@ -215,9 +218,10 @@ def main() -> None:
             tts=tts,
             llm=llm,
             on_barge_in=ui.on_barge_in,
+            min_rms=BARGE_IN_MIN_RMS,
+            consecutive_frames=BARGE_IN_CONSECUTIVE_FRAMES,
         )
         barge_in.enabled = BARGE_IN_ENABLED
-        vad.add_listener(barge_in)
 
         stt.add_listener(ui)
         llm.add_listener(ui)
@@ -231,24 +235,68 @@ def main() -> None:
         manager.start()
         stt.start()
 
+        import collections
+        import queue
+
+        _MIC_STOP = object()
+        mic_queue: queue.Queue[np.ndarray | object] = queue.Queue(maxsize=150)
+        pre_barge_in_buffer: collections.deque[np.ndarray] = collections.deque(maxlen=8)
+
         def audio_callback(indata, frames, time_info, status_flag):
-            if not BARGE_IN_ENABLED and player.is_playing:
-                return
             try:
-                audio = indata.astype(np.float32).flatten()
-                if BARGE_IN_ENABLED and AEC_ENABLED:
-                    cleaned = aec.process(audio, 16000)
-                else:
-                    cleaned = audio
-
-                if BARGE_IN_ENABLED:
-                    vad.process(cleaned, 16000)
-
-                stt.push(cleaned, 16000)
-            except AudioQueueFull:
+                mic_queue.put_nowait(indata.astype(np.float32, copy=True).flatten())
+            except queue.Full:
                 pass
-            except Exception:
-                logger.exception("Error in CLI audio callback.")
+
+        def _mic_worker():
+            while not stop_event.is_set():
+                try:
+                    raw_audio = mic_queue.get(timeout=0.05)
+                except queue.Empty:
+                    continue
+
+                if raw_audio is _MIC_STOP:
+                    break
+
+                try:
+                    is_playing = player.is_playing
+
+                    if not BARGE_IN_ENABLED and is_playing:
+                        pre_barge_in_buffer.clear()
+                        continue
+
+                    if BARGE_IN_ENABLED and AEC_ENABLED:
+                        cleaned = aec.process(raw_audio, 16000)
+                    else:
+                        cleaned = raw_audio
+
+                    barge_in.feed_audio(cleaned)
+
+                    if is_playing:
+                        # Assistant is currently speaking: buffer audio and detect user interruption
+                        pre_barge_in_buffer.append(cleaned)
+                        vad.process(cleaned, 16000)
+                        if vad.is_speech and barge_in.check_interruption(cleaned):
+                            # Genuine user interruption confirmed! Flush user's speech pre-roll
+                            for chunk in list(pre_barge_in_buffer):
+                                try:
+                                    stt.push(chunk, 16000)
+                                except AudioQueueFull:
+                                    pass
+                            pre_barge_in_buffer.clear()
+                        # Do NOT push speaker echo to STT while assistant is talking
+                    else:
+                        pre_barge_in_buffer.clear()
+                        vad.process(cleaned, 16000)
+                        try:
+                            stt.push(cleaned, 16000)
+                        except AudioQueueFull:
+                            pass
+                except Exception:
+                    logger.exception("Error in CLI mic worker.")
+
+        mic_thread = threading.Thread(target=_mic_worker, name="cli-mic-worker", daemon=True)
+        mic_thread.start()
 
         with _suppress_c_stderr():
             stream = sd.InputStream(
@@ -286,6 +334,12 @@ def main() -> None:
             try:
                 stream.stop()
                 stream.close()
+            except Exception:
+                pass
+
+        if mic_queue is not None:
+            try:
+                mic_queue.put_nowait(_MIC_STOP)
             except Exception:
                 pass
 
