@@ -4,10 +4,10 @@ The audio-processing layer is organized around independent capabilities rather t
 
 ## Pipeline boundary
 
-Browser microphone audio is converted to 16 kHz mono PCM and passed through preprocessing before reaching STT.
+Microphone audio is converted to 16 kHz mono PCM and passed through preprocessing before reaching STT.
 
 ```text
-WebRTC microphone
+Microphone (PortAudio / WebRTC)
     |
     v
 VAD
@@ -57,7 +57,7 @@ Audio stream resampling (e.g. converting 48 kHz WebRTC microphone audio down to 
 Acoustic echo cancellation is provided by `AcousticEchoCanceller` in `services/audio_processing/src/echo_cancellation.py`:
 
 - **Normalized Least Mean Squares (NLMS)** adaptive filter estimates room impulse response between speaker playback and microphone input.
-- Reference audio emitted by the audio player is fed into the canceller via a circular delay line (`feed_playback_reference`).
+- Reference audio emitted by the audio player is fed into the canceller via a circular delay line (`feed_reference(reference_audio, sample_rate)`).
 - The predicted echo signal is subtracted from incoming microphone frames prior to VAD processing, preventing the assistant from hearing its own voice and mistaking it for user speech or false interruptions.
 - Adapts filter coefficients with step-size learning rate $\mu$ and regularized power normalization $\epsilon$.
 
@@ -89,5 +89,12 @@ Audio stream acquisition and playback honor user-selected audio device indices c
 - `AUDIO_OUTPUT_DEVICE`: Specifies the speaker/headphone device index or name passed to `sounddevice.OutputStream(device=...)` in `AudioPlayer`.
 - During onboarding, `setup.py` queries `sounddevice.query_devices()` to enumerate and present all detected input devices (e.g. PulseAudio `RDPSource` under WSLg or hardware USB microphones) with their respective PortAudio device indices.
 
+## Unit Test Verification
 
+The audio processing pipeline is validated with dedicated unit tests:
+- `tests/test_vad_service.py`: VAD frame chunking, pre-speech roll buffer, speech state transitions.
+- `tests/test_cli_ui.py`: Audio playback state, UI waveform rendering, and interrupt coordination.
 
+```bash
+PYTHONPATH=. uv run pytest tests/test_vad_service.py tests/test_cli_ui.py
+```
