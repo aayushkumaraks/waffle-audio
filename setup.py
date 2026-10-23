@@ -259,15 +259,15 @@ def run_setup(env_path: Path = Path(".env"), force: bool = False, non_interactiv
     trigger_mode = "true" if trigger_mode_choice in ("true", "1", "yes", "y") else "false"
 
     barge_in_choice = prompt_with_default(
-        "  Barge-In Interruption (allow interrupting assistant mid-speech; requires headphones) [true/false]",
-        existing.get("VOICECHAT_BARGE_IN_ENABLED", "false"),
+        "  Barge-In Interruption (allow interrupting assistant mid-speech) [true/false]",
+        existing.get("VOICECHAT_BARGE_IN_ENABLED", "true"),
         non_interactive,
     ).lower()
     barge_in = "true" if barge_in_choice in ("true", "1", "yes", "y") else "false"
 
     aec_choice = prompt_with_default(
         "  Acoustic Echo Cancellation (AEC for loudspeaker playback) [true/false]",
-        existing.get("VOICECHAT_AEC_ENABLED", "false"),
+        existing.get("VOICECHAT_AEC_ENABLED", "true"),
         non_interactive,
     ).lower()
     aec = "true" if aec_choice in ("true", "1", "yes", "y") else "false"

@@ -182,8 +182,8 @@ STT_QUEUE_SIZE: int = _int_from_env("VOICECHAT_STT_QUEUE_SIZE", 200)
 
 _TRUTHY = {"1", "true", "yes", "on"}
 
-BARGE_IN_ENABLED: bool = os.getenv("VOICECHAT_BARGE_IN_ENABLED", "false").lower() in _TRUTHY
-AEC_ENABLED: bool = os.getenv("VOICECHAT_AEC_ENABLED", "false").lower() in _TRUTHY
+BARGE_IN_ENABLED: bool = os.getenv("VOICECHAT_BARGE_IN_ENABLED", "true").lower() in _TRUTHY
+AEC_ENABLED: bool = os.getenv("VOICECHAT_AEC_ENABLED", "true").lower() in _TRUTHY
 
 # ---------------------------------------------------------------------------
 # Kokoro TTS -- local model files

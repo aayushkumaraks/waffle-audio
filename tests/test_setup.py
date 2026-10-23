@@ -58,6 +58,8 @@ class TestSetupWizard(unittest.TestCase):
         self.assertIn('OLLAMA_MODEL="qwen3.5:4b"', content)
         self.assertIn('VOICECHAT_TTS_VOICE="anna"', content)
         self.assertIn('AUDIO_INPUT_DEVICE="default"', content)
+        self.assertIn('VOICECHAT_BARGE_IN_ENABLED="true"', content)
+        self.assertIn('VOICECHAT_AEC_ENABLED="true"', content)
         self.assertIn('GITHUB_PERSONAL_ACCESS_TOKEN=""', content)
 
         # Verify fields without defaults are present and empty
@@ -97,8 +99,8 @@ class TestSetupWizard(unittest.TestCase):
         "",           # Speed (default: 1.0)
         "",           # Mic (default: default)
         "",           # Trigger mode (default: false)
-        "",           # Barge in (default: false)
-        "",           # AEC (default: false)
+        "",           # Barge in (default: true)
+        "",           # AEC (default: true)
         "",           # Ollama url (default)
         "2",          # Model selection: index 2 -> gemma4:e4b
         "",           # GitHub token
@@ -119,8 +121,8 @@ class TestSetupWizard(unittest.TestCase):
         "",           # Speed
         "",           # Mic
         "",           # Trigger mode
-        "",           # Barge in
-        "",           # AEC
+        "",           # Barge in (default: true)
+        "",           # AEC (default: true)
         "",           # Ollama url
         "custom_mistral:7b",  # Model selection: custom name
         "",           # GitHub token
