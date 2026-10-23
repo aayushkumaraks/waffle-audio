@@ -294,6 +294,7 @@ class TestLLMProviderBenchmarkIntegration(unittest.TestCase):
                 self.followup_timings = (first_token_dur, full_dur)
 
         mock_tool_mgr = MagicMock()
+        mock_tool_mgr.get_ollama_tools.return_value = []
         mock_tool_mgr.execute_tool.return_value = "Sunny, 20C"
         mock_tool_mgr.last_execution_info = {"duration": 0.1, "fallback": False, "server": "mcp"}
         provider = LLMProvider(LLMProviderConfig(tools_enabled=True), tool_manager=mock_tool_mgr)

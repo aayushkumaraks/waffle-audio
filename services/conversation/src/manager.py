@@ -186,17 +186,20 @@ class ConversationManager(LLMListener):
         self._assistant_name = value.strip() if value else "Waffle"
 
     def is_trigger_word_present(self, text: str) -> bool:
-        """Check if 'Hey <ASSISTANT_NAME>', an active follow-up, or a tool call is spoken."""
+        """Check if 'Hey <ASSISTANT_NAME>' or an active conversation follow-up is spoken."""
         if not text:
             return False
 
-        # 1. Explicit tool invocation directive (e.g. "tool call", "tool-call", "use tool")
-        if re.search(
-            r"\b(?:tool[\s_-]*calls?|use\s+(?:a\s+|the\s+)?tool|call\s+(?:a\s+|the\s+)?tool)\b",
-            text,
-            re.IGNORECASE,
-        ):
-            return True
+        # 1. Check for wake phrase 'Hey <ASSISTANT_NAME>' (allowing common phonetic variants for speech recognition)
+        if self._assistant_name:
+            clean_name = self._assistant_name.strip()
+            if clean_name.lower() == "waffle":
+                name_pattern = r"(?:waffle|vuffle|woffle|vaudeville|waffel|waffles)"
+            else:
+                name_pattern = re.sub(r"\s+", r"\\s+", re.escape(clean_name))
+            pattern = rf"\bhey\b[,\s\-\.!?:;]*{name_pattern}\b"
+            if re.search(pattern, text, re.IGNORECASE):
+                return True
 
         # 2. Check if within active conversation follow-up grace window
         if (
@@ -205,13 +208,7 @@ class ConversationManager(LLMListener):
         ):
             return True
 
-        # 3. Check for wake phrase 'Hey <ASSISTANT_NAME>'
-        if not self._assistant_name:
-            return False
-        clean_name = self._assistant_name.strip()
-        escaped_name = re.sub(r"\s+", r"\\s+", re.escape(clean_name))
-        pattern = rf"\bhey\b[,\s\-\.!?:;]*{escaped_name}\b"
-        return bool(re.search(pattern, text, re.IGNORECASE))
+        return False
 
     @property
     def compactor(self) -> ContextCompactor:

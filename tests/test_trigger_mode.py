@@ -43,11 +43,15 @@ class TestTriggerMode(unittest.TestCase):
         self.assertTrue(manager.is_trigger_word_present("Hey-Waffle"))
         self.assertTrue(manager.is_trigger_word_present("Hey: Waffle."))
 
-        # Explicit tool call directives should also trigger
-        self.assertTrue(manager.is_trigger_word_present("Tool call, what is the weather?"))
-        self.assertTrue(manager.is_trigger_word_present("Can you do a tool-call to check time?"))
-        self.assertTrue(manager.is_trigger_word_present("tool_call: check stock"))
-        self.assertTrue(manager.is_trigger_word_present("use the tool to get time"))
+        # Phonetic variants of Waffle should trigger
+        self.assertTrue(manager.is_trigger_word_present("Hey Vuffle, can you hear me?"))
+        self.assertTrue(manager.is_trigger_word_present("Hey Vaudeville, what time is it?"))
+
+        # Explicit tool call directives without wake phrase should NOT trigger
+        self.assertFalse(manager.is_trigger_word_present("Tool call, what is the weather?"))
+        self.assertFalse(manager.is_trigger_word_present("Can you do a tool-call to check time?"))
+        self.assertFalse(manager.is_trigger_word_present("tool_call: check stock"))
+        self.assertFalse(manager.is_trigger_word_present("use the tool to get time"))
 
         # Invalid phrases
         self.assertFalse(manager.is_trigger_word_present("What is the weather?"))

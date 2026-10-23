@@ -282,15 +282,14 @@ class LLMProvider:
         """
         self._abort_event.clear()
 
-        maybe_requires_tools = self._guess_tool_intent(messages)
         tools = (
             self._tool_manager.get_ollama_tools()
-            if (self._config.tools_enabled and maybe_requires_tools)
+            if self._config.tools_enabled
             else []
         )
         sys_prompt = (
             self._build_tool_system_prompt(**self._get_persona_kwargs())
-            if maybe_requires_tools
+            if self._config.tools_enabled
             else self._build_default_system_prompt(**self._get_persona_kwargs())
         )
         payload = self._build_request(messages, tools=tools, system_prompt=sys_prompt)
@@ -313,24 +312,21 @@ class LLMProvider:
                     callbacks=callbacks,
                 )
             elif not tool_calls and not self._abort_event.is_set():
-                # If tool context was provided and LLM chose not to invoke tools: "If not then good" -
-                # the LLM's conversational reply has already been streamed.
-                # Only if tools were omitted due to no tool intent guess AND the model explicitly refused
-                # citing lack of real-time information do we invoke fallback search.
+                # If the LLM output stalling phrases pretending to look things up or cited lack of real-time info,
+                # immediately rescue with DuckDuckGo search so the user receives a real answer.
                 if (
                     self._config.tools_enabled
-                    and not payload.get("tools")
                     and self._should_fallback_to_ddg_search(messages, initial_content)
                 ):
-                    logger.info("Model indicated lack of real-time info; invoking DuckDuckGo fallback search.")
-                    last_user_query = messages[-1].content if messages else ""
+                    logger.info("Model indicated lack of real-time info or stalled; invoking DuckDuckGo fallback search.")
+                    fallback_query = self._extract_fallback_query(messages, initial_content)
                     self._execute_tools_and_stream_reply(
                         messages=messages,
                         tool_calls=[
                             {
                                 "function": {
                                     "name": "duckduckgo_search",
-                                    "arguments": {"query": last_user_query},
+                                    "arguments": {"query": fallback_query},
                                 }
                             }
                         ],
@@ -402,13 +398,18 @@ class LLMProvider:
 
             # If no tool calls occurred, flush any unstreamed content and complete turn
             if not tool_calls and not self._abort_event.is_set():
-                if not generation_started and collected_content.strip():
-                    t_first_tok = time.perf_counter()
-                    callbacks.on_generation_started()
-                    generation_started = True
-                    callbacks.on_generation_updated(collected_content)
-                if generation_started:
-                    callbacks.on_generation_completed(collected_content)
+                needs_fallback = (
+                    self._config.tools_enabled
+                    and self._should_fallback_to_ddg_search(payload.get("messages", []), collected_content)
+                )
+                if not needs_fallback:
+                    if not generation_started and collected_content.strip():
+                        t_first_tok = time.perf_counter()
+                        callbacks.on_generation_started()
+                        generation_started = True
+                        callbacks.on_generation_updated(collected_content)
+                    if generation_started:
+                        callbacks.on_generation_completed(collected_content)
 
         if is_benchmark_enabled():
             elapsed = time.perf_counter() - t_start
@@ -434,67 +435,9 @@ class LLMProvider:
         messages: Sequence[Message],
         tool_calls: list[dict[str, Any]],
         callbacks: LLMCallbacks,
+        max_rounds: int = 3,
     ) -> None:
-        """Execute tool calls, format results, and stream final spoken assistant answer."""
-        tool_results: list[dict[str, Any]] = []
-
-        for call in tool_calls:
-            if self._abort_event.is_set():
-                return
-
-            fn = call.get("function", {})
-            name = fn.get("name", "")
-            args = fn.get("arguments", {})
-
-            if isinstance(args, str):
-                try:
-                    args = json.loads(args)
-                except Exception:
-                    args = {"query": args}
-
-            logger.info("Executing tool '%s' with args %s", name, args)
-
-            # Play emotional filler sentence from phrases/ (e.g. "Hmm, let me search that for you.")
-            filler_info = self._phrase_manager.play_filler(name, args)
-            filler_text = filler_info.get("text", "") if filler_info else ""
-
-            try:
-                callbacks.on_tool_started(name, args, filler_text)
-            except TypeError:
-                callbacks.on_tool_started(name, args)
-
-            # ToolManager executes the tool, or falls back to DuckDuckGo search
-            t_exec_start = time.perf_counter()
-            result_str = self._tool_manager.execute_tool(name, args)
-            t_exec_dur = time.perf_counter() - t_exec_start
-
-            exec_info = getattr(self._tool_manager, "last_execution_info", {})
-            actual_dur = exec_info.get("duration", t_exec_dur)
-            is_fallback = exec_info.get("fallback", False)
-            server_name = exec_info.get("server", "mcp")
-
-            try:
-                callbacks.on_tool_completed(
-                    name,
-                    result_str,
-                    duration=actual_dur,
-                    fallback=is_fallback,
-                    server=server_name,
-                )
-            except TypeError:
-                callbacks.on_tool_completed(name, result_str)
-
-            tool_results.append(
-                {
-                    "name": name,
-                    "result": result_str,
-                }
-            )
-
-        if self._abort_event.is_set():
-            return
-
-        # Prepare follow-up messages including tool context
+        """Execute tool calls, format results, and stream final spoken assistant answer across up to max_rounds."""
         sliding_messages = messages[-14:] if len(messages) > 14 else messages
         conversation_context = [
             {"role": m.role if m.role in {"user", "assistant"} else "user", "content": m.content}
@@ -505,127 +448,232 @@ class LLMProvider:
         followup_messages = [
             {"role": "system", "content": followup_sys_prompt},
             *conversation_context,
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": tool_calls,
-            },
         ]
-        for res in tool_results:
+
+        current_tool_calls = tool_calls
+
+        for round_idx in range(max_rounds):
+            if self._abort_event.is_set():
+                return
+
+            round_tool_results: list[dict[str, Any]] = []
+
+            for call in current_tool_calls:
+                if self._abort_event.is_set():
+                    return
+
+                fn = call.get("function", {})
+                name = fn.get("name", "")
+                args = fn.get("arguments", {})
+
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except Exception:
+                        args = {"query": args}
+
+                logger.info("Executing tool '%s' with args %s (round %d)", name, args, round_idx + 1)
+
+                filler_info = self._phrase_manager.play_filler(name, args)
+                filler_text = filler_info.get("text", "") if filler_info else ""
+
+                try:
+                    callbacks.on_tool_started(name, args, filler_text)
+                except TypeError:
+                    callbacks.on_tool_started(name, args)
+
+                t_exec_start = time.perf_counter()
+                result_str = self._tool_manager.execute_tool(name, args)
+                t_exec_dur = time.perf_counter() - t_exec_start
+
+                exec_info = getattr(self._tool_manager, "last_execution_info", {})
+                actual_dur = exec_info.get("duration", t_exec_dur)
+                is_fallback = exec_info.get("fallback", False)
+                server_name = exec_info.get("server", "mcp")
+
+                try:
+                    callbacks.on_tool_completed(
+                        name,
+                        result_str,
+                        duration=actual_dur,
+                        fallback=is_fallback,
+                        server=server_name,
+                    )
+                except TypeError:
+                    callbacks.on_tool_completed(name, result_str)
+
+                round_tool_results.append({"name": name, "result": result_str})
+
             followup_messages.append(
                 {
-                    "role": "tool",
-                    "content": res["result"],
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": current_tool_calls,
                 }
             )
+            for res in round_tool_results:
+                followup_messages.append(
+                    {
+                        "role": "tool",
+                        "content": res["result"],
+                    }
+                )
 
-        payload = {
-            "model": self._config.model,
-            "messages": followup_messages,
-            "stream": True,
-            "think": False,
-            "keep_alive": OLLAMA_KEEP_ALIVE,
-            "options": {
-                "num_ctx": OLLAMA_NUM_CTX,
-                "num_predict": OLLAMA_NUM_PREDICT,
-            },
-        }
+            # Check if we should allow another round of tool calling or finalize
+            is_last_round = (round_idx + 1 >= max_rounds)
+            raw_tools = (
+                self._tool_manager.get_ollama_tools()
+                if (not is_last_round and self._config.tools_enabled)
+                else None
+            )
+            tools_for_payload = raw_tools if isinstance(raw_tools, list) and raw_tools else None
 
-        # Stream the final answer directly to speech callbacks
-        t_followup_start = time.perf_counter()
-        t_followup_first_tok: float | None = None
-
-        req = self._client.build_request("POST", "/api/chat", json=payload)
-        response = self._client.send(req, stream=True)
-        if response.status_code != 200:
-            response.close()
-            # Fallback to prompt-based format if model or server rejected role: tool
-            tool_context_lines = ["Tool Execution Results:"]
-            for res in tool_results:
-                tool_context_lines.append(f"[{res['name']} Output]:\n{res['result']}")
-            tool_context = "\n\n".join(tool_context_lines)
-
-            fallback_messages = [
-                {"role": "system", "content": followup_sys_prompt},
-                *conversation_context,
-                {
-                    "role": "user",
-                    "content": (
-                        f"Tool Execution Results:\n{tool_context}\n\n"
-                        "Answer the user's question directly and conversationally using these tool results. "
-                        "Adhere strictly to speech rules (2-3 short spoken sentences, plain English words only, no markdown)."
-                    ),
+            payload = {
+                "model": self._config.model,
+                "messages": followup_messages,
+                "stream": True,
+                "think": False,
+                "keep_alive": OLLAMA_KEEP_ALIVE,
+                "options": {
+                    "num_ctx": OLLAMA_NUM_CTX,
+                    "num_predict": OLLAMA_NUM_PREDICT,
                 },
-            ]
-            payload["messages"] = fallback_messages
+            }
+            if tools_for_payload:
+                payload["tools"] = tools_for_payload
+
+            t_followup_start = time.perf_counter()
+            t_followup_first_tok: float | None = None
+
             req = self._client.build_request("POST", "/api/chat", json=payload)
             response = self._client.send(req, stream=True)
-            response.raise_for_status()
+            if response.status_code != 200:
+                response.close()
+                # Fallback to prompt-based format if model or server rejected role: tool
+                tool_context_lines = ["Tool Execution Results:"]
+                for res in round_tool_results:
+                    tool_context_lines.append(f"[{res['name']} Output]:\n{res['result']}")
+                tool_context = "\n\n".join(tool_context_lines)
 
-        generation_started = False
-        generated_text = ""
+                fallback_messages = [
+                    {"role": "system", "content": followup_sys_prompt},
+                    *conversation_context,
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Tool Execution Results:\n{tool_context}\n\n"
+                            "Answer the user's question directly and conversationally using these tool results. "
+                            "Adhere strictly to speech rules (2-3 short spoken sentences, plain English words only, no markdown)."
+                        ),
+                    },
+                ]
+                payload["messages"] = fallback_messages
+                payload.pop("tools", None)
+                req = self._client.build_request("POST", "/api/chat", json=payload)
+                response = self._client.send(req, stream=True)
+                response.raise_for_status()
 
-        try:
-            for line in response.iter_lines():
-                if self._abort_event.is_set():
-                    logger.info("LLM generation aborted by signal during tool follow-up.")
-                    break
+            generation_started = False
+            generated_text = ""
+            next_tool_calls: list[dict[str, Any]] = []
 
-                if not line:
+            try:
+                for line in response.iter_lines():
+                    if self._abort_event.is_set():
+                        logger.info("LLM generation aborted by signal during tool follow-up.")
+                        break
+
+                    if not line:
+                        continue
+
+                    chunk = json.loads(line)
+                    msg = chunk.get("message", {})
+
+                    chunk_tc = msg.get("tool_calls")
+                    if chunk_tc:
+                        next_tool_calls.extend(chunk_tc)
+
+                    content = msg.get("content", "")
+                    if content:
+                        generated_text += content
+                        # Only stream to speech if no tool calls are being made
+                        if not next_tool_calls and not tools_for_payload:
+                            if not generation_started:
+                                t_followup_first_tok = time.perf_counter()
+                                callbacks.on_generation_started()
+                                generation_started = True
+                            callbacks.on_generation_updated(generated_text)
+
+                t_followup_end = time.perf_counter()
+                fu_full_dur = max(0.0, t_followup_end - t_followup_start)
+                fu_first_tok_dur = max(
+                    0.0,
+                    (t_followup_first_tok - t_followup_start)
+                    if t_followup_first_tok is not None
+                    else fu_full_dur,
+                )
+
+                # Check if text contained inline tool calls if native tool_calls was empty
+                if not next_tool_calls and generated_text:
+                    parsed = self._detect_text_tool_calls(generated_text)
+                    if parsed:
+                        next_tool_calls = parsed
+
+                # If the model requested another tool call and we have rounds left, continue loop
+                if next_tool_calls and not is_last_round and not self._abort_event.is_set():
+                    current_tool_calls = next_tool_calls
                     continue
 
-                chunk = json.loads(line)
-                content = chunk.get("message", {}).get("content", "")
-
-                if not content:
-                    continue
-
-                if not generation_started:
+                # Final speech delivery
+                if not generation_started and generated_text.strip():
                     t_followup_first_tok = time.perf_counter()
                     callbacks.on_generation_started()
                     generation_started = True
+                    callbacks.on_generation_updated(generated_text)
 
-                generated_text += content
-                callbacks.on_generation_updated(generated_text)
-
-            t_followup_end = time.perf_counter()
-            fu_full_dur = max(0.0, t_followup_end - t_followup_start)
-            fu_first_tok_dur = max(
-                0.0,
-                (t_followup_first_tok - t_followup_start)
-                if t_followup_first_tok is not None
-                else fu_full_dur,
-            )
-
-            # Flush content if not yet started
-            if not generation_started and generated_text.strip():
-                t_followup_first_tok = time.perf_counter()
-                callbacks.on_generation_started()
-                generation_started = True
-                callbacks.on_generation_updated(generated_text)
-
-            if generation_started and not self._abort_event.is_set():
-                if is_benchmark_enabled():
-                    logger.info(
-                        "[LLM BENCHMARK] Tool follow-up LLM stream completed in %.3fs (TTFT: %.3fs, len=%d chars)",
-                        fu_full_dur,
-                        fu_first_tok_dur,
-                        len(generated_text),
-                    )
+                if generation_started and not self._abort_event.is_set():
+                    if is_benchmark_enabled():
+                        logger.info(
+                            "[LLM BENCHMARK] Tool follow-up LLM stream completed in %.3fs (TTFT: %.3fs, len=%d chars)",
+                            fu_full_dur,
+                            fu_first_tok_dur,
+                            len(generated_text),
+                        )
+                    callbacks.on_generation_completed(generated_text)
                     if hasattr(callbacks, "record_followup_llm"):
                         try:
                             callbacks.record_followup_llm(fu_first_tok_dur, fu_full_dur)
                         except Exception:
                             pass
-                callbacks.on_generation_completed(generated_text)
-        finally:
-            response.close()
-
+                break
+            finally:
+                response.close()
 
     def _detect_text_tool_calls(self, text: str) -> list[dict[str, Any]]:
         """Extract tool calls if the model output tool call syntax as raw text."""
-        # Check for <tool_call>...</tool_call> or {"name": "...", "arguments": ...}
         tool_calls: list[dict[str, Any]] = []
+
+        # 1. Natural DuckDuckGo invocation in text: e.g. "DuckDuckGo, fetch latest headlines"
+        ddg_match = re.search(
+            r"\bduckduckgo[,\s]+(?:fetch|search|query|find|look up)\s+(?:the\s+)?([^.!?\n]+)",
+            text,
+            re.IGNORECASE,
+        )
+        if ddg_match:
+            q = ddg_match.group(1).strip()
+            from constants import USER_LOCATION
+            loc = USER_LOCATION or "New Delhi"
+            if loc and loc.lower().split(",")[0] not in q.lower():
+                q = f"{q} {loc}"
+            tool_calls.append(
+                {
+                    "function": {
+                        "name": "duckduckgo_search",
+                        "arguments": {"query": q},
+                    }
+                }
+            )
+            return tool_calls
 
         tag_pattern = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
         for match in tag_pattern.finditer(text):
@@ -680,16 +728,15 @@ class LLMProvider:
 
         return tool_calls
 
-
     def _should_fallback_to_ddg_search(
-        self, messages: Sequence[Message], assistant_text: str
+        self, messages: Sequence[Message] | Sequence[dict[str, Any]], assistant_text: str
     ) -> bool:
-        """Detect if the assistant replied that it lacks information when asked a question."""
+        """Detect if the assistant replied with refusal, stalling, or pretending to search."""
         if not messages or not assistant_text:
             return False
 
         asst = assistant_text.lower()
-        refusal_phrases = [
+        refusal_and_stalling_phrases = [
             "don't have access to real-time",
             "do not have access to real-time",
             "cannot browse the internet",
@@ -706,8 +753,71 @@ class LLMProvider:
             "do not have live information",
             "don't have live information",
             "unable to browse",
+            "duckduckgo, fetch",
+            "duckduckgo, search",
+            "let me check the weather",
+            "let me find out what the weather",
+            "let me quickly check",
+            "let me check the current weather",
+            "let me look that up",
+            "searching for",
+            "looking up",
+            "give it a second",
+            "please give me a moment",
+            "stop nagging and maybe i'll give you an actual answer",
+            "look up the latest news",
         ]
-        return any(phrase in asst for phrase in refusal_phrases)
+        return any(phrase in asst for phrase in refusal_and_stalling_phrases)
+
+    @classmethod
+    def _extract_fallback_query(
+        cls, messages: Sequence[Message] | Sequence[dict[str, Any]], assistant_text: str
+    ) -> str:
+        """Derive an effective, standalone search query from assistant stalling text or conversation context."""
+        asst = assistant_text.strip()
+        from constants import USER_LOCATION
+        loc = USER_LOCATION or "New Delhi"
+
+        # 1. Check if the assistant text described what it was 'searching for'
+        match = re.search(
+            r"(?:searching for|looking up|checking (?:the )?latest updates (?:in|on)|search for|duckduckgo[,\s]+(?:fetch|search|find))\s+([^.!?]+)",
+            asst,
+            re.IGNORECASE,
+        )
+        if match:
+            candidate = match.group(1).strip()
+            candidate = re.sub(
+                r"\b(?:some|very soon|right now|please give me a moment|scheduled very soon|details)\b",
+                "",
+                candidate,
+                flags=re.IGNORECASE,
+            ).strip()
+            if len(candidate) > 4:
+                is_local = any(k in candidate.lower() for k in ["news", "weather", "events", "traffic", "local", "city"])
+                if is_local and loc and loc.lower().split(",")[0] not in candidate.lower():
+                    candidate = f"{candidate} {loc}"
+                return re.sub(r"\s+", " ", candidate).strip()
+
+        # 2. Check conversation history backwards for a topical user query
+        for msg in reversed(messages):
+            role = msg.role if hasattr(msg, "role") else msg.get("role")
+            content = msg.content if hasattr(msg, "content") else msg.get("content", "")
+            if role == "user" and content:
+                text = content.strip()
+                text_lower = text.lower()
+                if text_lower in {"and", "and...", "what about", "can you look it up?", "can you search it right now", "tell me", "no tell me", "no, tell me!"}:
+                    continue
+                is_local = any(k in text_lower for k in ["news", "weather", "temperature", "events", "traffic", "local", "city", "happenings"])
+                if is_local and loc and loc.lower().split(",")[0] not in text_lower:
+                    return f"{text} {loc}"
+                return text
+
+        # 3. Default back to last user message or general query
+        last_user = ""
+        if messages:
+            last_msg = messages[-1]
+            last_user = (last_msg.content if hasattr(last_msg, "content") else last_msg.get("content", "")).strip()
+        return last_user or (f"latest news {loc}".strip() if loc else "latest news")
 
     def _get_persona_kwargs(self) -> dict[str, str | None]:
         return {

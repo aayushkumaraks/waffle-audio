@@ -328,10 +328,10 @@ class TestLLMProviderToolCalling(unittest.TestCase):
         self.assertFalse(has_tool_call_keyword(""))
         self.assertFalse(has_tool_call_keyword(None))
 
-    def test_generate_omits_tools_when_no_keyword(self) -> None:
+    def test_generate_omits_tools_when_tools_disabled(self) -> None:
         mock_tool_manager = MagicMock()
         mock_tool_manager.get_ollama_tools.return_value = [{"type": "function", "function": {"name": "test_tool"}}]
-        provider = LLMProvider(LLMProviderConfig(tools_enabled=True), tool_manager=mock_tool_manager)
+        provider = LLMProvider(LLMProviderConfig(tools_enabled=False), tool_manager=mock_tool_manager)
 
         messages = [Message(role="user", content="What is the capital of France?")]
         callbacks = DummyCallbacks()
@@ -340,7 +340,7 @@ class TestLLMProviderToolCalling(unittest.TestCase):
             provider.generate(messages, callbacks)
             mock_stream.assert_called_once()
             payload = mock_stream.call_args[0][0]
-            # Tools omitted to keep context light
+            # Tools omitted to keep context light when tools are disabled
             self.assertNotIn("tools", payload)
             # Default lightweight prompt without tool calling policy
             system_msg = payload["messages"][0]["content"]
