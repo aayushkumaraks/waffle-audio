@@ -55,6 +55,7 @@ class TestSetupWizard(unittest.TestCase):
 
         # Verify defaults are present
         self.assertIn('ASSISTANT_NAME="Waffle"', content)
+        self.assertIn('VOICECHAT_PERSONALITY="natural"', content)
         self.assertIn('OLLAMA_MODEL="qwen3.5:4b"', content)
         self.assertIn('VOICECHAT_TTS_VOICE="anna"', content)
         self.assertIn('AUDIO_INPUT_DEVICE="default"', content)
@@ -94,6 +95,7 @@ class TestSetupWizard(unittest.TestCase):
         "",           # User location
         "",           # User timezone
         "",           # Assistant name (default: Waffle)
+        "",           # Personality (default: natural)
         "",           # TTS Backend (default: pocket)
         "",           # Voice (default: anna)
         "",           # Speed (default: 1.0)
@@ -109,6 +111,7 @@ class TestSetupWizard(unittest.TestCase):
         setup.run_setup(env_path=self.env_file, force=True, non_interactive=False)
         content = self.env_file.read_text(encoding="utf-8")
         self.assertIn('OLLAMA_MODEL="gemma4:e4b"', content)
+        self.assertIn('VOICECHAT_PERSONALITY="natural"', content)
 
     @patch("setup._list_ollama_models", return_value=["qwen3.5:4b"])
     @patch("builtins.input", side_effect=[
@@ -116,6 +119,7 @@ class TestSetupWizard(unittest.TestCase):
         "",           # User location
         "",           # User timezone
         "",           # Assistant name
+        "4",          # Personality selection: index 4 -> annoyed
         "",           # TTS Backend
         "",           # Voice
         "",           # Speed
@@ -131,6 +135,7 @@ class TestSetupWizard(unittest.TestCase):
         setup.run_setup(env_path=self.env_file, force=True, non_interactive=False)
         content = self.env_file.read_text(encoding="utf-8")
         self.assertIn('OLLAMA_MODEL="custom_mistral:7b"', content)
+        self.assertIn('VOICECHAT_PERSONALITY="annoyed"', content)
 
 
 class TestEnvLoadingAndPersonalization(unittest.TestCase):

@@ -71,6 +71,12 @@ def main() -> None:
         default=os.getenv("VOICECHAT_TRIGGER_MODE", "false").lower() in ("true", "1", "yes"),
         help="Only process and respond when the trigger word 'Hey ASSISTANT_NAME' is spoken",
     )
+    parser.add_argument(
+        "--personality",
+        type=str,
+        default=os.getenv("VOICECHAT_PERSONALITY", os.getenv("ASSISTANT_PERSONALITY")),
+        help="Assistant personality style (natural, professional, playful, annoyed, sarcastic, empathetic, enthusiastic, concise, philosophical)",
+    )
     args, _ = parser.parse_known_args()
 
     from constants import set_benchmark_enabled
@@ -131,6 +137,7 @@ def main() -> None:
         from constants import (
             AEC_ENABLED,
             ASSISTANT_NAME,
+            ASSISTANT_PERSONALITY,
             AUDIO_INPUT_DEVICE,
             BARGE_IN_CONSECUTIVE_FRAMES,
             BARGE_IN_ENABLED,
@@ -153,11 +160,12 @@ def main() -> None:
         console.print("  [green]✓[/green] VAD & Echo Cancellation initialized.\n")
 
         console.print(f"[bold cyan][3/6][/bold cyan] Connecting to LLM ({OLLAMA_MODEL}) & discovering MCP tools...")
-        from services.llm.src import LLMProvider, LLMProviderConfig, LLMService
-        provider = LLMProvider(LLMProviderConfig())
+        from services.llm.src import LLMProvider, LLMProviderConfig, LLMService, get_personality
+        provider = LLMProvider(LLMProviderConfig(personality=args.personality))
         llm = LLMService(provider)
         tool_count = len(provider.tool_manager.get_ollama_tools())
-        console.print(f"  [green]✓[/green] LLM connected & {tool_count} tool(s) registered.\n")
+        active_pers = get_personality(args.personality or ASSISTANT_PERSONALITY)
+        console.print(f"  [green]✓[/green] LLM connected (Personality: {active_pers.name}) & {tool_count} tool(s) registered.\n")
 
         console.print(f"[bold cyan][4/6][/bold cyan] Loading Text-to-Speech engine ({args.voice or 'default'})...")
         from services.tts.src import TTSConfig, TTSService

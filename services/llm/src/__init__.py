@@ -14,7 +14,17 @@ from .llm_service import (
     ServiceNotStarted,
 )
 
+from .personalities import (
+    DEFAULT_PERSONALITY,
+    PERSONALITIES,
+    Personality,
+    build_personality_prompt,
+    get_personality,
+    list_personalities,
+)
+
 __all__ = [
+    "DEFAULT_PERSONALITY",
     "LLMCallbacks",
     "LLMListener",
     "LLMProvider",
@@ -22,6 +32,11 @@ __all__ = [
     "LLMProviderError",
     "LLMService",
     "LLMServiceError",
+    "PERSONALITIES",
+    "Personality",
     "ServiceAlreadyStarted",
     "ServiceNotStarted",
+    "build_personality_prompt",
+    "get_personality",
+    "list_personalities",
 ]

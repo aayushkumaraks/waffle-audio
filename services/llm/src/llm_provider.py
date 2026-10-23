@@ -12,6 +12,7 @@ import httpx
 
 from constants import (
     ASSISTANT_NAME,
+    ASSISTANT_PERSONALITY,
     OLLAMA_BASE_URL,
     OLLAMA_KEEP_ALIVE,
     OLLAMA_MODEL,
@@ -25,6 +26,7 @@ from constants import (
 )
 from models import Message
 from services.tools import PhraseManager, ToolManager
+from .personalities import build_personality_prompt, get_personality
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +79,7 @@ class LLMProviderConfig:
     user_name: str | None = None
     user_location: str | None = None
     user_timezone: str | None = None
+    personality: str | None = None
 
 
 class LLMProviderError(Exception):
@@ -712,6 +715,7 @@ class LLMProvider:
             "user_name": self._config.user_name if self._config.user_name is not None else USER_NAME,
             "user_location": self._config.user_location if self._config.user_location is not None else USER_LOCATION,
             "user_timezone": self._config.user_timezone if self._config.user_timezone is not None else USER_TIMEZONE,
+            "personality": self._config.personality if self._config.personality is not None else ASSISTANT_PERSONALITY,
         }
 
     _VOICE_RULES = (
@@ -722,7 +726,9 @@ class LLMProvider:
         "3. NEVER include asterisked or bracketed actions or expressive tags (e.g. do NOT write *laughs*, *smiles*, [sighs], or *chuckles*).\n"
         "4. Spell out numbers, measurements, and symbols in full words (e.g., 'three kilometers' not '3km', 'percent' not '%').\n"
         "5. Use only standard conversational punctuation (periods, commas, question marks). Do not use asterisks, hashes, backticks, or dashes.\n"
-        "6. Never address the user by any name unless their name is explicitly provided in the persona instructions above."
+        "6. Never address the user by any name unless their name is explicitly provided in the persona instructions above.\n"
+        "7. Never address the user by their name unless the context is very serious.\n"
+        "8. Never mention user location unless user has asked a question requiring their location data."
     )
 
     @classmethod
@@ -732,24 +738,19 @@ class LLMProvider:
         user_name: str | None = None,
         user_location: str | None = None,
         user_timezone: str | None = None,
+        personality: str | None = None,
     ) -> str:
         asst_name = assistant_name if assistant_name is not None else ASSISTANT_NAME
         u_name = user_name if user_name is not None else USER_NAME
         u_loc = user_location if user_location is not None else USER_LOCATION
         u_tz = user_timezone if user_timezone is not None else USER_TIMEZONE
+        pers = personality if personality is not None else ASSISTANT_PERSONALITY
 
         parts = []
-        if asst_name and asst_name.strip():
-            parts.append(
-                f"You are a helpful voice assistant named {asst_name.strip()}. You speak in a natural, calm, and friendly conversational tone."
-            )
-        else:
-            parts.append(
-                "You are a helpful voice assistant. You speak in a natural, calm, and friendly conversational tone."
-            )
+        parts.append(build_personality_prompt(asst_name, pers))
 
         if u_name and u_name.strip():
-            parts.append(f"You are speaking with {u_name.strip()}. Address the user by this name naturally when appropriate.")
+            parts.append(f"You are speaking with {u_name.strip()}. Address the user by this name as per the speech rules.")
         else:
             parts.append(
                 "The user's name is not provided. Never assume, invent, or use any name to address or refer to the user."
@@ -781,12 +782,14 @@ class LLMProvider:
         user_name: str | None = None,
         user_location: str | None = None,
         user_timezone: str | None = None,
+        personality: str | None = None,
     ) -> str:
         prefix = cls._build_persona_prefix(
             assistant_name=assistant_name,
             user_name=user_name,
             user_location=user_location,
             user_timezone=user_timezone,
+            personality=personality,
         )
         return (
             f"{prefix}\n\n"
@@ -803,12 +806,14 @@ class LLMProvider:
         user_name: str | None = None,
         user_location: str | None = None,
         user_timezone: str | None = None,
+        personality: str | None = None,
     ) -> str:
         prefix = cls._build_persona_prefix(
             assistant_name=assistant_name,
             user_name=user_name,
             user_location=user_location,
             user_timezone=user_timezone,
+            personality=personality,
         )
         return (
             f"{prefix}\n\n"
@@ -833,12 +838,14 @@ class LLMProvider:
         user_name: str | None = None,
         user_location: str | None = None,
         user_timezone: str | None = None,
+        personality: str | None = None,
     ) -> str:
         prefix = cls._build_persona_prefix(
             assistant_name=assistant_name,
             user_name=user_name,
             user_location=user_location,
             user_timezone=user_timezone,
+            personality=personality,
         )
         return (
             f"{prefix}\n\n"

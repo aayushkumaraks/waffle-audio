@@ -214,6 +214,33 @@ def run_setup(env_path: Path = Path(".env"), force: bool = False, non_interactiv
         non_interactive,
     )
 
+    # Personality selection
+    from services.llm.src.personalities import list_personalities, get_personality
+    personalities = list_personalities()
+    print(f"  {DIM}Available Personalities:{RESET}")
+    default_pers = existing.get("VOICECHAT_PERSONALITY", existing.get("ASSISTANT_PERSONALITY", "natural")).lower()
+    default_pers_idx = 1
+    for idx, p in enumerate(personalities, 1):
+        rec = f" {BOLD}{GREEN}(recommended){RESET}" if p.id == "natural" else ""
+        if p.id == default_pers:
+            default_pers_idx = idx
+        print(f"    [{idx}] {p.name} {DIM}({p.id}): {p.description}{RESET}{rec}")
+
+    if non_interactive:
+        personality_choice = default_pers
+    else:
+        p_choice = prompt_with_default(
+            f"  Assistant Personality (1-{len(personalities)} or name)",
+            str(default_pers_idx),
+            non_interactive,
+        )
+        if p_choice.isdigit() and 1 <= int(p_choice) <= len(personalities):
+            personality_choice = personalities[int(p_choice) - 1].id
+        elif p_choice:
+            personality_choice = get_personality(p_choice).id
+        else:
+            personality_choice = default_pers
+
     tts_backend = prompt_with_default(
         "  TTS Backend (pocket or kokoro)",
         existing.get("VOICECHAT_TTS_BACKEND", "pocket"),
@@ -339,6 +366,7 @@ USER_TIMEZONE="{user_timezone}"
 
 # Assistant Identity & Voice (Defaults provided)
 ASSISTANT_NAME="{assistant_name}"
+VOICECHAT_PERSONALITY="{personality_choice}"
 VOICECHAT_TTS_BACKEND="{tts_backend}"
 VOICECHAT_TTS_VOICE="{assistant_voice}"
 VOICECHAT_TTS_SPEED="{tts_speed}"

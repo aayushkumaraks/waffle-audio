@@ -75,6 +75,7 @@ USER_NAME: str = os.getenv("USER_NAME", "").strip()
 USER_LOCATION: str = os.getenv("USER_LOCATION", "").strip()
 USER_TIMEZONE: str = os.getenv("USER_TIMEZONE", "").strip()
 ASSISTANT_NAME: str = os.getenv("ASSISTANT_NAME", "Waffle").strip()
+ASSISTANT_PERSONALITY: str = os.getenv("VOICECHAT_PERSONALITY", os.getenv("ASSISTANT_PERSONALITY", "natural")).strip().lower()
 TRIGGER_MODE: bool = os.getenv("VOICECHAT_TRIGGER_MODE", "false").lower() in ("true", "1", "yes")
 
 # ---------------------------------------------------------------------------
