@@ -8,7 +8,6 @@ Sets up robust, unbuffered file logging to the logs/ directory:
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 
 

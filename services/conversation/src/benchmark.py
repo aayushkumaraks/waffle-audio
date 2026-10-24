@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
 import time
 from dataclasses import asdict, dataclass, field
@@ -19,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from constants import BENCHMARK_ENABLED, is_benchmark_enabled
+from constants import is_benchmark_enabled
 
 # README benchmark reference targets (seconds)
 README_TARGET_GATE = 0.40          # Sentence gate silence wait

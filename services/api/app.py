@@ -220,13 +220,18 @@ _llm_request_lock = threading.Lock()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    runtime.start()
+    import os
+
+    if not os.getenv("TESTING"):
+        runtime.start()
 
     try:
         yield
     finally:
         await _webrtc_close_all()
-        runtime.stop()
+        if not os.getenv("TESTING"):
+            runtime.stop()
+
 
 
 app = FastAPI(

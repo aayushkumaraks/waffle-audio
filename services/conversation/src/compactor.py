@@ -5,7 +5,7 @@ import logging
 import re
 import threading
 import time
-from typing import Any, Callable, Sequence
+from typing import Callable, Sequence
 
 import httpx
 

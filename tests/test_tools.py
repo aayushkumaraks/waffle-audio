@@ -16,7 +16,6 @@ from services.llm.src.llm_provider import (
 )
 from services.tools import (
     DuckDuckGoSearch,
-    MCPClientManager,
     MCPServerConfig,
     MCPToolDefinition,
     PhraseManager,
@@ -445,6 +444,143 @@ class TestLLMProviderToolCalling(unittest.TestCase):
             Message(role="user", content="Tell me a joke"),
         ]
         self.assertFalse(provider._guess_tool_intent(messages_chitchat))
+
+    def test_generate_executes_tool_when_regex_misses_native_call(self) -> None:
+        """When regex heuristics miss tool intent, but Ollama stream returns native tool_calls, tool is executed."""
+        mock_tool_manager = MagicMock()
+        provider = LLMProvider(LLMProviderConfig(tools_enabled=True), tool_manager=mock_tool_manager)
+
+        # Query that does not match tool intent regex
+        messages = [Message(role="user", content="Tell me something about the Arsenal match yesterday")]
+        self.assertFalse(has_tool_call_keyword(messages[0].content))
+        callbacks = DummyCallbacks()
+
+        native_calls = [
+            {
+                "function": {
+                    "name": "duckduckgo_search",
+                    "arguments": {"query": "Arsenal match yesterday score"},
+                }
+            }
+        ]
+
+        with patch.object(
+            provider,
+            "_stream_or_collect_tools",
+            return_value=(native_calls, ""),
+        ), patch.object(provider, "_execute_tools_and_stream_reply") as mock_exec:
+            provider.generate(messages, callbacks)
+            mock_exec.assert_called_once()
+            call_kwargs = mock_exec.call_args[1]
+            self.assertEqual(call_kwargs["tool_calls"], native_calls)
+            self.assertEqual(call_kwargs["callbacks"], callbacks)
+
+    def test_generate_executes_tool_when_regex_misses_inline_text_call(self) -> None:
+        """When regex heuristics miss tool intent, but LLM output contains inline <tool_call> tags, it is parsed and executed."""
+        mock_tool_manager = MagicMock()
+        provider = LLMProvider(LLMProviderConfig(tools_enabled=True), tool_manager=mock_tool_manager)
+
+        messages = [Message(role="user", content="Who directed the movie Inception?")]
+        self.assertFalse(has_tool_call_keyword(messages[0].content))
+        callbacks = DummyCallbacks()
+
+        inline_xml = '<tool_call>{"name": "duckduckgo_search", "arguments": {"query": "Inception director"}}</tool_call>'
+
+        with patch.object(
+            provider,
+            "_stream_or_collect_tools",
+            return_value=([], inline_xml),
+        ), patch.object(provider, "_execute_tools_and_stream_reply") as mock_exec:
+            provider.generate(messages, callbacks)
+            mock_exec.assert_called_once()
+            call_kwargs = mock_exec.call_args[1]
+            self.assertEqual(call_kwargs["tool_calls"][0]["function"]["name"], "duckduckgo_search")
+            self.assertEqual(call_kwargs["tool_calls"][0]["function"]["arguments"], {"query": "Inception director"})
+
+    def test_generate_executes_tool_when_regex_misses_raw_json_tool_call(self) -> None:
+        """When regex heuristics miss tool intent, but LLM output contains raw JSON with function name, it is parsed and executed."""
+        mock_tool_manager = MagicMock()
+        provider = LLMProvider(LLMProviderConfig(tools_enabled=True), tool_manager=mock_tool_manager)
+
+        messages = [Message(role="user", content="Calculate this for me")]
+        self.assertFalse(has_tool_call_keyword(messages[0].content))
+        callbacks = DummyCallbacks()
+
+        raw_json = '{"name": "duckduckgo_search", "arguments": {"query": "calculate expression"}}'
+
+        with patch.object(
+            provider,
+            "_stream_or_collect_tools",
+            return_value=([], raw_json),
+        ), patch.object(provider, "_execute_tools_and_stream_reply") as mock_exec:
+            provider.generate(messages, callbacks)
+            mock_exec.assert_called_once()
+            call_kwargs = mock_exec.call_args[1]
+            self.assertEqual(call_kwargs["tool_calls"][0]["function"]["name"], "duckduckgo_search")
+
+    def test_generate_raises_llm_provider_error_on_http_failure(self) -> None:
+        """HTTP connection errors raise LLMProviderError when not aborted."""
+        import httpx
+        from services.llm.src.llm_provider import LLMProviderError
+
+        provider = LLMProvider(LLMProviderConfig())
+        messages = [Message(role="user", content="Hello")]
+        callbacks = DummyCallbacks()
+
+        with patch.object(
+            provider,
+            "_stream_or_collect_tools",
+            side_effect=httpx.ConnectError("Connection refused"),
+        ):
+            with self.assertRaises(LLMProviderError):
+                provider.generate(messages, callbacks)
+
+    def test_generate_aborts_silently_when_abort_flag_set(self) -> None:
+        """When generation is aborted by signal, no LLMProviderError is raised."""
+        import httpx
+
+        provider = LLMProvider(LLMProviderConfig())
+        messages = [Message(role="user", content="Hello")]
+        callbacks = DummyCallbacks()
+
+        def abort_and_raise(*args, **kwargs):
+            provider.abort()
+            raise httpx.ConnectError("Connection refused")
+
+        with patch.object(
+            provider,
+            "_stream_or_collect_tools",
+            side_effect=abort_and_raise,
+        ):
+            # Should not raise because abort event is set
+            provider.generate(messages, callbacks)
+
+    def test_stream_or_collect_tools_suppresses_inline_tool_speech(self) -> None:
+        """Inline tool call syntax in stream chunks is not dispatched to on_generation_updated."""
+        import json
+        from unittest.mock import MagicMock
+
+        provider = LLMProvider(LLMProviderConfig(tools_enabled=True), tool_manager=MagicMock())
+        callbacks = DummyCallbacks()
+
+        lines = [
+            json.dumps({"message": {"content": "<tool_call>{\"name\": "}}),
+            json.dumps({"message": {"content": "\"duckduckgo_search\", \"arguments\": {\"query\": \"test\"}}</tool_call>"}}),
+        ]
+
+        mock_response = MagicMock()
+        mock_response.iter_lines.return_value = lines
+        mock_response.__enter__.return_value = mock_response
+
+        with patch.object(provider._client, "stream", return_value=mock_response):
+            tool_calls, content = provider._stream_or_collect_tools({"messages": []}, callbacks)
+            self.assertEqual(len(tool_calls), 1)
+            self.assertEqual(tool_calls[0]["function"]["name"], "duckduckgo_search")
+            # Callbacks should not have started or updated premature speech for tool call syntax
+            self.assertFalse(callbacks.started)
+            self.assertEqual(callbacks.updates, [])
+            self.assertFalse(callbacks.completed)
+
 
 
 

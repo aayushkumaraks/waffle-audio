@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 from multiprocessing import shared_memory
-from typing import Optional
 
 import numpy as np
 import numpy.typing as npt

@@ -135,6 +135,8 @@ class LLMService(LLMCallbacks):
             except queue.Empty:
                 break
 
+    interrupt = abort
+
     def generate(self, messages: Sequence[Message]) -> None:
         if not self._started:
             raise ServiceNotStarted("LLMService is not started.")

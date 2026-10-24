@@ -7,9 +7,6 @@ import os
 from dataclasses import dataclass, field
 from typing import Any
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
-
 logger = logging.getLogger(__name__)
 
 
@@ -55,6 +52,9 @@ class MCPClientManager:
     async def _list_tools_stdio(
         self, config: MCPServerConfig
     ) -> list[MCPToolDefinition]:
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+
         merged_env = os.environ.copy()
         merged_env.update(config.env)
 
@@ -84,6 +84,7 @@ class MCPClientManager:
     async def _list_tools_sse(
         self, config: MCPServerConfig
     ) -> list[MCPToolDefinition]:
+        from mcp import ClientSession
         from mcp.client.sse import sse_client
 
         async with sse_client(config.url or "", headers=config.headers) as (read_stream, write_stream):
@@ -117,6 +118,9 @@ class MCPClientManager:
     async def _call_tool_stdio(
         self, config: MCPServerConfig, tool_name: str, arguments: dict[str, Any]
     ) -> str:
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
+
         merged_env = os.environ.copy()
         merged_env.update(config.env)
 
@@ -149,6 +153,7 @@ class MCPClientManager:
     async def _call_tool_sse(
         self, config: MCPServerConfig, tool_name: str, arguments: dict[str, Any]
     ) -> str:
+        from mcp import ClientSession
         from mcp.client.sse import sse_client
 
         async with sse_client(config.url or "", headers=config.headers) as (read_stream, write_stream):
