@@ -161,6 +161,8 @@ class LLMProvider:
         """Signal immediate abort of active LLM streaming."""
         self._abort_event.set()
 
+    interrupt = abort
+
     def start(self) -> None:
         """Verify that the Ollama server is reachable and initialize tools & phrases."""
         try:
@@ -389,13 +391,31 @@ class LLMProvider:
                 if content:
                     collected_content += content
 
-                    # Only stream to speech if no tool calls have appeared and buffer threshold is met
-                    if not tool_calls and len(collected_content) >= buffer_threshold:
+                    # Only stream to speech if no tool calls have appeared, not inline tool call syntax, and buffer threshold is met
+                    is_inline_tool_syntax = collected_content.lstrip().startswith(
+                        ("<tool_call", "{\"name\"", "{\"function\"", "[tool_call", "```json")
+                    )
+                    if not tool_calls and not is_inline_tool_syntax and len(collected_content) >= buffer_threshold:
                         if not generation_started:
                             t_first_tok = time.perf_counter()
                             callbacks.on_generation_started()
                             generation_started = True
                         callbacks.on_generation_updated(collected_content)
+
+            # Check if text contained inline tool calls if native tool_calls was empty
+            if not tool_calls and collected_content:
+                parsed_inline_calls = self._detect_text_tool_calls(collected_content)
+                if parsed_inline_calls:
+                    tool_calls = parsed_inline_calls
+                    if generation_started:
+                        generation_started = False
+                        if hasattr(self._phrase_manager, "_tts") and hasattr(
+                            self._phrase_manager._tts, "interrupt"
+                        ):
+                            try:
+                                self._phrase_manager._tts.interrupt()
+                            except Exception:
+                                pass
 
             # If no tool calls occurred, flush any unstreamed content and complete turn
             if not tool_calls and not self._abort_event.is_set():

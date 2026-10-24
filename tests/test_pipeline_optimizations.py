@@ -16,20 +16,17 @@ from unittest.mock import MagicMock
 import numpy as np
 
 from models import Message
-from services.audio.src.audio_player import AudioPlayer
 from services.audio_processing.src import (
     AcousticEchoCanceller,
     AECConfig,
     BargeInController,
     VADConfig,
-    VADListener,
     VADService,
     resample_audio,
 )
 from services.conversation.src.manager import ConversationManager
-from services.conversation.src.sentence_gate import ClauseChunker, SentenceGate
+from services.conversation.src.sentence_gate import ClauseChunker
 from services.llm.src.llm_provider import LLMProvider, LLMProviderConfig
-from services.llm.src.llm_service import LLMService
 from services.shared_memory import SharedAudioBuffer
 
 

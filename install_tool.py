@@ -19,7 +19,7 @@ from rich.table import Table
 from rich.text import Text
 
 from constants import GITHUB_PERSONAL_ACCESS_TOKEN, MCP_CONFIG_PATH
-from services.tools import DuckDuckGoSearch, ToolManager
+from services.tools import ToolManager
 
 console = Console()
 

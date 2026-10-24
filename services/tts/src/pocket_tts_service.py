@@ -11,11 +11,14 @@ from constants import (
     resolve_voice_spec,
 )
 
+from typing import TYPE_CHECKING
+
 # Pocket TTS uses Hugging Face downloads for model weights and bundled voices.
 # Pin their cache to a project-owned, persistent directory before importing it.
 os.environ.setdefault("HF_HOME", str(Path(POCKET_TTS_CACHE_DIR).resolve()))
 
-from pocket_tts import TTSModel
+if TYPE_CHECKING:
+    from pocket_tts import TTSModel
 from .base_tts_service import BaseTTSService
 from .hf_cache import load_local_first
 from .tts_types import AudioBuffer, TTSConfig
@@ -23,6 +26,7 @@ class PocketTTSService(BaseTTSService):
     def __init__(self, config: TTSConfig) -> None:
         super().__init__(config); self._engine: TTSModel | None = None; self._voice_state: object | None = None
     def _load_engine(self) -> None:
+        from pocket_tts import TTSModel
         def load() -> tuple[TTSModel, object]:
             engine = TTSModel.load_model(language=self._config.language or POCKET_TTS_DEFAULT_LANGUAGE, quantize=self._config.quantize)
             voice_target = resolve_voice_spec(self._config.voice or POCKET_TTS_DEFAULT_VOICE)

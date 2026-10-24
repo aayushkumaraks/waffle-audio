@@ -105,7 +105,7 @@ OLLAMA_NUM_CTX: int = _int_from_env("OLLAMA_NUM_CTX", 2048)
 # ---------------------------------------------------------------------------
 
 MCP_CONFIG_PATH: Path = Path(os.getenv("VOICECHAT_MCP_CONFIG", "mcp_servers.json"))
-TOOLS_ENABLED: bool = os.getenv("VOICECHAT_TOOLS_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+TOOLS_ENABLED: bool = os.getenv("VOICECHAT_TOOLS_ENABLED", "false").lower() in {"1", "true", "yes", "on"}
 DUCKDUCKGO_SEARCH_ENABLED: bool = os.getenv("VOICECHAT_DDGS_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
 DUCKDUCKGO_MAX_RESULTS: int = _int_from_env("VOICECHAT_DDGS_MAX_RESULTS", 4)
 FILLER_PHRASES_ENABLED: bool = os.getenv("VOICECHAT_FILLER_PHRASES_ENABLED", "true").lower() in {"1", "true", "yes", "on"}

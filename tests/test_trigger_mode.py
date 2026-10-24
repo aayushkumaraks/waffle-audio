@@ -1,10 +1,9 @@
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 import argparse
 
 from services.conversation.src.manager import ConversationManager
 from services.conversation.src.ui import ConversationUI
-from models import Message
 
 
 class TestTriggerMode(unittest.TestCase):

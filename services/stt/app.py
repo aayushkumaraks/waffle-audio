@@ -15,35 +15,38 @@ class ConsoleListener(STTListener):
         print(f"Completed: {text}")
 
 
-service = STTService()
-service.start()
-service.add_listener(ConsoleListener())
+def main() -> None:
+    service = STTService()
+    service.start()
+    service.add_listener(ConsoleListener())
+
+    def audio_callback(indata, frames, time_info, status):
+        if status:
+            print(status)
+
+        audio = indata.astype(np.float32).flatten()
+        service.push(audio, 16000)
+
+    stream = sd.InputStream(
+        samplerate=16000,
+        channels=1,
+        dtype="float32",
+        blocksize=512,
+        callback=audio_callback,
+    )
+
+    stream.start()
+
+    print("Listening... Press Ctrl+C to stop.")
+
+    try:
+        while True:
+            time.sleep(0.1)
+    except KeyboardInterrupt:
+        stream.stop()
+        stream.close()
+        service.stop()
 
 
-def audio_callback(indata, frames, time_info, status):
-    if status:
-        print(status)
-
-    audio = indata.astype(np.float32).flatten()
-    service.push(audio, 16000)
-
-
-stream = sd.InputStream(
-    samplerate=16000,
-    channels=1,
-    dtype="float32",
-    blocksize=512,
-    callback=audio_callback,
-)
-
-stream.start()
-
-print("Listening... Press Ctrl+C to stop.")
-
-try:
-    while True:
-        time.sleep(0.1)
-except KeyboardInterrupt:
-    stream.stop()
-    stream.close()
-    service.stop()
+if __name__ == "__main__":
+    main()

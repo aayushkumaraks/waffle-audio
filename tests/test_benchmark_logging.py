@@ -1,18 +1,13 @@
 """Unit tests for voice chat benchmarking and logging infrastructure."""
 import json
 import logging
-import os
 import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
-from services.conversation.src.benchmark import (
-    BenchmarkTracker,
-    ToolExecutionMetric,
-    TurnMetric,
-)
-from services.logging_config import FlushingFileHandler, setup_app_logging
+from services.conversation.src.benchmark import BenchmarkTracker
+from services.logging_config import setup_app_logging
 
 
 class TestBenchmarkTracker(unittest.TestCase):

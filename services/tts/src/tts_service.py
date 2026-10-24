@@ -31,11 +31,6 @@ def _normalize_backend(name: str | None) -> str:
 # Determine backend from constants.py, defaulting to pocket
 _ACTIVE_BACKEND = _normalize_backend(getattr(constants, "TTS_BACKEND", TTS_BACKEND))
 
-if _ACTIVE_BACKEND == "kokoro":
-    from .kokoro_tts_service import KokoroTTSService  # type: ignore[assignment]
-else:
-    from .pocket_tts_service import PocketTTSService  # type: ignore[assignment]
-
 
 class TTSService:
     """Create the selected engine without changing application call sites.
