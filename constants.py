@@ -98,7 +98,7 @@ OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen3.5:4b")
 OLLAMA_KEEP_ALIVE: str = os.getenv("OLLAMA_KEEP_ALIVE", "30m")
 # Hard cap on reply length (replies are spoken aloud, 2-3 short sentences).
 OLLAMA_NUM_PREDICT: int = _int_from_env("OLLAMA_NUM_PREDICT", 160)
-OLLAMA_NUM_CTX: int = _int_from_env("OLLAMA_NUM_CTX", 2048)
+OLLAMA_NUM_CTX: int = _int_from_env("OLLAMA_NUM_CTX", 4096)
 
 # ---------------------------------------------------------------------------
 # MCP & Tool Calling

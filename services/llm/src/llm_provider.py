@@ -138,6 +138,49 @@ def has_tool_intent(
 has_tool_call_keyword = has_tool_intent
 
 
+TOOL_PROMISE_PATTERN = re.compile(
+    r"\b(?:let\s+me|i'?ll|i\s+will|i'?m\s+going\s+to|i\s+am\s+going\s+to|allow\s+me\s+to|"
+    r"give\s+me\s+a\s+(?:moment|second)|one\s+moment|right\s+now)\b.{0,60}?"
+    r"\b(?:check|search|look|find|pull\s+up|get|fetch|see)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+
+_TOOL_SELECT_STOPWORDS = frozenset(
+    {"which", "where", "about", "other", "their", "using", "given", "specific", "return", "returns", "tool", "tools"}
+)
+
+
+def is_tool_promise(text: str | None) -> bool:
+    """True if the text is a short 'let me check that' style promise rather than an answer."""
+    if not text:
+        return False
+    return len(text) < 300 and bool(TOOL_PROMISE_PATTERN.search(text))
+
+
+def select_relevant_tools(
+    tools: list[dict[str, Any]], user_text: str | None
+) -> list[dict[str, Any]]:
+    """Keep duckduckgo_search plus only tools whose name/description words appear in the user text.
+
+    Sending every MCP tool schema bloats the prompt and confuses small models.
+    """
+    words = set(re.findall(r"[a-z]{4,}", (user_text or "").lower()))
+    selected: list[dict[str, Any]] = []
+    for tool in tools:
+        fn = tool.get("function", {})
+        name = fn.get("name", "")
+        if name == "duckduckgo_search":
+            selected.append(tool)
+            continue
+        keywords = set(re.findall(r"[a-z]{5,}", name.lower().replace("_", " ")))
+        first_sentence = (fn.get("description") or "").lower().split(".")[0]
+        keywords |= set(re.findall(r"[a-z]{5,}", first_sentence))
+        keywords -= _TOOL_SELECT_STOPWORDS
+        if keywords & words or name.lower() in (user_text or "").lower():
+            selected.append(tool)
+    return selected
+
+
 class LLMProvider:
     """Communicates with the local Ollama server with tool calling & fallback support."""
 
@@ -282,8 +325,9 @@ class LLMProvider:
         self._abort_event.clear()
 
         maybe_requires_tools = self._guess_tool_intent(messages)
+        last_user_text = next((m.content for m in reversed(messages) if m.role == "user"), "")
         tools = (
-            self._tool_manager.get_ollama_tools()
+            select_relevant_tools(self._tool_manager.get_ollama_tools(), last_user_text)
             if (self._config.tools_enabled and maybe_requires_tools)
             else []
         )
@@ -316,13 +360,21 @@ class LLMProvider:
                 # the LLM's conversational reply has already been streamed.
                 # Only if tools were omitted due to no tool intent guess AND the model explicitly refused
                 # citing lack of real-time information do we invoke fallback search.
-                if (
-                    self._config.tools_enabled
-                    and not payload.get("tools")
-                    and self._should_fallback_to_ddg_search(messages, initial_content)
+                promised_without_calling = bool(payload.get("tools")) and is_tool_promise(initial_content)
+                if self._config.tools_enabled and (
+                    promised_without_calling
+                    or (
+                        not payload.get("tools")
+                        and self._should_fallback_to_ddg_search(messages, initial_content)
+                    )
                 ):
-                    logger.info("Model indicated lack of real-time info; invoking DuckDuckGo fallback search.")
-                    last_user_query = messages[-1].content if messages else ""
+                    logger.info(
+                        "Model %s; invoking DuckDuckGo fallback search.",
+                        "promised a lookup without calling a tool"
+                        if promised_without_calling
+                        else "indicated lack of real-time info",
+                    )
+                    last_user_query = self._build_fallback_query(messages)
                     self._execute_tools_and_stream_reply(
                         messages=messages,
                         tool_calls=[
@@ -339,6 +391,17 @@ class LLMProvider:
         except (httpx.HTTPError, json.JSONDecodeError) as exc:
             if not self._abort_event.is_set():
                 raise LLMProviderError("Failed to generate response.") from exc
+
+    @staticmethod
+    def _build_fallback_query(messages: Sequence[Message]) -> str:
+        """Build a standalone search query; short follow-ups borrow the previous user turn."""
+        user_msgs = [m.content for m in messages if m.role == "user" and m.content]
+        if not user_msgs:
+            return ""
+        query = user_msgs[-1]
+        if len(query.split()) < 5 and len(user_msgs) > 1:
+            query = f"{user_msgs[-2]} {query}"
+        return query
 
     def _stream_or_collect_tools(
         self,
@@ -394,7 +457,7 @@ class LLMProvider:
                     # Only stream to speech if no tool calls have appeared, not inline tool call syntax, and buffer threshold is met
                     is_inline_tool_syntax = collected_content.lstrip().startswith(
                         ("<tool_call", "{\"name\"", "{\"function\"", "[tool_call", "```json")
-                    )
+                    ) or (has_tools_config and is_tool_promise(collected_content))
                     if not tool_calls and not is_inline_tool_syntax and len(collected_content) >= buffer_threshold:
                         if not generation_started:
                             t_first_tok = time.perf_counter()
@@ -418,7 +481,8 @@ class LLMProvider:
                                 pass
 
             # If no tool calls occurred, flush any unstreamed content and complete turn
-            if not tool_calls and not self._abort_event.is_set():
+            suppress_promise = has_tools_config and is_tool_promise(collected_content)
+            if not tool_calls and not self._abort_event.is_set() and not suppress_promise:
                 if not generation_started and collected_content.strip():
                     t_first_tok = time.perf_counter()
                     callbacks.on_generation_started()

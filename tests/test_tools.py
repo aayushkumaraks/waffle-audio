@@ -348,7 +348,7 @@ class TestLLMProviderToolCalling(unittest.TestCase):
 
     def test_generate_includes_tools_when_keyword_present(self) -> None:
         mock_tool_manager = MagicMock()
-        mock_tool_manager.get_ollama_tools.return_value = [{"type": "function", "function": {"name": "test_tool"}}]
+        mock_tool_manager.get_ollama_tools.return_value = [{"type": "function", "function": {"name": "duckduckgo_search"}}]
         provider = LLMProvider(LLMProviderConfig(tools_enabled=True), tool_manager=mock_tool_manager)
 
         messages = [Message(role="user", content="Tool call, what is the weather in Paris?")]

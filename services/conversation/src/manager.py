@@ -81,6 +81,8 @@ class ConversationManager(LLMListener):
         )
         self._chunker = ClauseChunker()
         self._partial_reply = ""
+        self._tool_args: dict[str, dict] = {}
+        self._tool_notes: list[str] = []
 
         self._started = False
         self._pending_generation = False
@@ -260,6 +262,8 @@ class ConversationManager(LLMListener):
 
         # Yield all resources to the active user turn by aborting background compaction
         self._compactor.abort()
+        self._tool_args.clear()
+        self._tool_notes.clear()
 
         self._history.append(
             Message(
@@ -333,6 +337,23 @@ class ConversationManager(LLMListener):
         except Exception:
             logger.exception("Could not queue speech.")
 
+    def on_tool_started(
+        self, tool_name: str, arguments: dict, phrase: str | None = None
+    ) -> None:
+        self._tool_args[tool_name] = arguments
+
+    def on_tool_completed(
+        self,
+        tool_name: str,
+        result: str,
+        duration: float = 0.0,
+        fallback: bool = False,
+        server: str = "mcp",
+    ) -> None:
+        args = self._tool_args.pop(tool_name, {})
+        excerpt = re.sub(r"\s+", " ", str(result or "")).strip()[:500]
+        self._tool_notes.append(f"Used {tool_name} with {args}. Result: {excerpt}")
+
     def on_generation_completed(self, text: str) -> None:
         with self._state_lock:
             if not self._pending_generation:
@@ -348,10 +369,14 @@ class ConversationManager(LLMListener):
         if remainder:
             self._speak(remainder)
 
+        history_text = text
+        if self._tool_notes:
+            history_text = f"(Tool context: {' | '.join(self._tool_notes)})\n{text}"
+            self._tool_notes.clear()
         self._history.append(
             Message(
                 role="assistant",
-                content=text,
+                content=history_text,
             )
         )
         self._prune_history()
