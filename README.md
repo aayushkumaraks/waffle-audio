@@ -1,5 +1,8 @@
 # Waffle-Audio
 
+<img width="2172" height="724" alt="image" src="https://github.com/user-attachments/assets/a939b6e9-5733-4d49-a7c0-a2fda3765f23" />
+
+
 **Talk to a local AI the way you talk to a person. Private, fast, and fully yours.**
 
 Waffle-Audio is a real-time, voice-to-voice assistant that runs entirely on your local machine. Speak naturally, and it answers out loud in **sub-second latency (0.83s)**. No cloud APIs, no subscriptions, and your voice never leaves your computer.
