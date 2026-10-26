@@ -6,6 +6,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Any, Callable, Sequence
 
 import httpx
@@ -72,6 +73,7 @@ class LLMProviderConfig:
 
     base_url: str = OLLAMA_BASE_URL
     model: str = OLLAMA_MODEL
+    system_prompt: str | None = None
     tools_enabled: bool = TOOLS_ENABLED
     assistant_name: str | None = None
     user_name: str | None = None
@@ -243,7 +245,8 @@ class LLMProvider:
                 timeout=httpx.Timeout(60.0),
             )
             logger.info("LLM model warmed up with context length %d.", OLLAMA_NUM_CTX)
-        except httpx.HTTPError:
+        except Exception:
+            # Includes RuntimeError raised if the client is closed during shutdown.
             logger.debug("LLM warm-up failed.", exc_info=True)
 
     def stop(self) -> None:
@@ -332,20 +335,21 @@ class LLMProvider:
             else []
         )
         sys_prompt = (
-            self._build_tool_system_prompt(**self._get_persona_kwargs())
-            if maybe_requires_tools
-            else self._build_default_system_prompt(**self._get_persona_kwargs())
+            self._config.system_prompt
+            or (
+                self._build_tool_system_prompt(**self._get_persona_kwargs())
+                if maybe_requires_tools
+                else self._build_default_system_prompt(**self._get_persona_kwargs())
+            )
         )
         payload = self._build_request(messages, tools=tools, system_prompt=sys_prompt)
 
         try:
             tool_calls, initial_content = self._stream_or_collect_tools(payload, callbacks)
 
-            # Check if text contained inline tool calls if native tool_calls was empty
+            # Safety net: parse inline tool-call text if the stream helper returned none
             if not tool_calls and initial_content:
-                parsed_calls = self._detect_text_tool_calls(initial_content)
-                if parsed_calls:
-                    tool_calls = parsed_calls
+                tool_calls = self._detect_text_tool_calls(initial_content)
 
             # If the LLM decided to invoke tools, execute them and stream synthesized reply
             if tool_calls and not self._abort_event.is_set():
@@ -403,6 +407,16 @@ class LLMProvider:
             query = f"{user_msgs[-2]} {query}"
         return query
 
+    def _interrupt_speech(self) -> None:
+        """Stop any speech already started (e.g. premature text before a tool call arrived)."""
+        tts = getattr(self._phrase_manager, "_tts", None)
+        interrupt = getattr(tts, "interrupt", None)
+        if callable(interrupt):
+            try:
+                interrupt()
+            except Exception:
+                logger.debug("TTS interrupt failed.", exc_info=True)
+
     def _stream_or_collect_tools(
         self,
         payload: dict[str, Any],
@@ -416,6 +430,7 @@ class LLMProvider:
         tool_calls: list[dict[str, Any]] = []
         collected_content = ""
         generation_started = False
+        inline_syntax_seen = False
         has_tools_config = bool(payload.get("tools"))
         buffer_threshold = 80 if has_tools_config else 0
         t_start = time.perf_counter()
@@ -442,22 +457,21 @@ class LLMProvider:
                     # If any premature speech started before tool_calls arrived, flush/reset
                     if generation_started:
                         generation_started = False
-                        if hasattr(self._phrase_manager, "_tts") and hasattr(
-                            self._phrase_manager._tts, "interrupt"
-                        ):
-                            try:
-                                self._phrase_manager._tts.interrupt()
-                            except Exception:
-                                pass
+                        self._interrupt_speech()
 
                 content = msg.get("content", "")
                 if content:
                     collected_content += content
 
-                    # Only stream to speech if no tool calls have appeared, not inline tool call syntax, and buffer threshold is met
-                    is_inline_tool_syntax = collected_content.lstrip().startswith(
-                        ("<tool_call", "{\"name\"", "{\"function\"", "[tool_call", "```json")
-                    ) or (has_tools_config and is_tool_promise(collected_content))
+                    # Only stream to speech if no tool calls have appeared, not inline tool call syntax, and buffer threshold is met.
+                    # The prefix check is sticky so we don't re-scan the whole buffer on every chunk.
+                    if not inline_syntax_seen:
+                        inline_syntax_seen = collected_content.lstrip().startswith(
+                            ("<tool_call", "{\"name\"", "{\"function\"", "[tool_call", "```json")
+                        )
+                    is_inline_tool_syntax = inline_syntax_seen or (
+                        has_tools_config and is_tool_promise(collected_content)
+                    )
                     if not tool_calls and not is_inline_tool_syntax and len(collected_content) >= buffer_threshold:
                         if not generation_started:
                             t_first_tok = time.perf_counter()
@@ -472,13 +486,7 @@ class LLMProvider:
                     tool_calls = parsed_inline_calls
                     if generation_started:
                         generation_started = False
-                        if hasattr(self._phrase_manager, "_tts") and hasattr(
-                            self._phrase_manager._tts, "interrupt"
-                        ):
-                            try:
-                                self._phrase_manager._tts.interrupt()
-                            except Exception:
-                                pass
+                        self._interrupt_speech()
 
             # If no tool calls occurred, flush any unstreamed content and complete turn
             suppress_promise = has_tools_config and is_tool_promise(collected_content)
@@ -546,7 +554,11 @@ class LLMProvider:
 
             # ToolManager executes the tool, or falls back to DuckDuckGo search
             t_exec_start = time.perf_counter()
-            result_str = self._tool_manager.execute_tool(name, args)
+            try:
+                result_str = self._tool_manager.execute_tool(name, args)
+            except Exception as exc:
+                logger.warning("Tool '%s' raised: %s", name, exc)
+                result_str = f"Tool '{name}' failed: {exc}"
             t_exec_dur = time.perf_counter() - t_exec_start
 
             exec_info = getattr(self._tool_manager, "last_execution_info", {})
@@ -565,12 +577,7 @@ class LLMProvider:
             except TypeError:
                 callbacks.on_tool_completed(name, result_str)
 
-            tool_results.append(
-                {
-                    "name": name,
-                    "result": result_str,
-                }
-            )
+            tool_results.append({"name": name, "result": result_str})
 
         if self._abort_event.is_set():
             return
@@ -582,7 +589,7 @@ class LLMProvider:
             for m in sliding_messages
         ]
 
-        followup_sys_prompt = self._build_followup_system_prompt(**self._get_persona_kwargs())
+        followup_sys_prompt = self._config.system_prompt or self._build_followup_system_prompt(**self._get_persona_kwargs())
         followup_messages = [
             {"role": "system", "content": followup_sys_prompt},
             *conversation_context,
@@ -596,6 +603,7 @@ class LLMProvider:
             followup_messages.append(
                 {
                     "role": "tool",
+                    "tool_name": res["name"],
                     "content": res["result"],
                 }
             )
@@ -618,30 +626,34 @@ class LLMProvider:
 
         req = self._client.build_request("POST", "/api/chat", json=payload)
         response = self._client.send(req, stream=True)
-        if response.status_code != 200:
-            response.close()
-            # Fallback to prompt-based format if model or server rejected role: tool
-            tool_context_lines = ["Tool Execution Results:"]
-            for res in tool_results:
-                tool_context_lines.append(f"[{res['name']} Output]:\n{res['result']}")
-            tool_context = "\n\n".join(tool_context_lines)
+        try:
+            if response.status_code != 200:
+                response.close()
+                # Fallback to prompt-based format if model or server rejected role: tool
+                tool_context = "\n\n".join(
+                    f"[{res['name']} Output]:\n{res['result']}" for res in tool_results
+                )
 
-            fallback_messages = [
-                {"role": "system", "content": followup_sys_prompt},
-                *conversation_context,
-                {
-                    "role": "user",
-                    "content": (
-                        f"Tool Execution Results:\n{tool_context}\n\n"
-                        "Answer the user's question directly and conversationally using these tool results. "
-                        "Adhere strictly to speech rules (2-3 short spoken sentences, plain English words only, no markdown)."
-                    ),
-                },
-            ]
-            payload["messages"] = fallback_messages
-            req = self._client.build_request("POST", "/api/chat", json=payload)
-            response = self._client.send(req, stream=True)
-            response.raise_for_status()
+                fallback_messages = [
+                    {"role": "system", "content": followup_sys_prompt},
+                    *conversation_context,
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Tool Execution Results:\n{tool_context}\n\n"
+                            "Answer the user's question directly and conversationally using these tool results. "
+                            "Adhere strictly to speech rules (2-3 short spoken sentences, plain English words only, no markdown)."
+                        ),
+                    },
+                ]
+                payload["messages"] = fallback_messages
+                req = self._client.build_request("POST", "/api/chat", json=payload)
+                response = self._client.send(req, stream=True)
+                response.raise_for_status()
+        except BaseException:
+            # Don't leak the streaming connection if the retry or status check fails
+            response.close()
+            raise
 
         generation_started = False
         generated_text = ""
@@ -703,61 +715,44 @@ class LLMProvider:
             response.close()
 
 
+    _TOOL_CALL_TAG_PATTERN = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
+
+    @staticmethod
+    def _as_tool_call(data: Any) -> dict[str, Any] | None:
+        if not isinstance(data, dict) or not isinstance(data.get("name"), str):
+            return None
+        args = data.get("arguments", data.get("parameters", {}))
+        return {"function": {"name": data["name"], "arguments": args}}
+
     def _detect_text_tool_calls(self, text: str) -> list[dict[str, Any]]:
         """Extract tool calls if the model output tool call syntax as raw text."""
         # Check for <tool_call>...</tool_call> or {"name": "...", "arguments": ...}
         tool_calls: list[dict[str, Any]] = []
 
-        tag_pattern = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
-        for match in tag_pattern.finditer(text):
+        for match in self._TOOL_CALL_TAG_PATTERN.finditer(text):
             try:
-                data = json.loads(match.group(1).strip())
-                if "name" in data:
-                    tool_calls.append(
-                        {
-                            "function": {
-                                "name": data["name"],
-                                "arguments": data.get("arguments", {}),
-                            }
-                        }
-                    )
-            except Exception:
-                pass
+                call = self._as_tool_call(json.loads(match.group(1).strip()))
+            except ValueError:
+                continue
+            if call:
+                tool_calls.append(call)
 
         if not tool_calls and "{" in text:
-            start_idx = 0
-            while start_idx < len(text):
-                start = text.find("{", start_idx)
-                if start == -1:
-                    break
-                brace_count = 0
-                end = -1
-                for i in range(start, len(text)):
-                    if text[i] == "{":
-                        brace_count += 1
-                    elif text[i] == "}":
-                        brace_count -= 1
-                        if brace_count == 0:
-                            end = i + 1
-                            break
-                if end != -1:
-                    candidate = text[start:end]
-                    try:
-                        data = json.loads(candidate)
-                        if isinstance(data, dict) and "name" in data:
-                            tool_calls.append(
-                                {
-                                    "function": {
-                                        "name": data["name"],
-                                        "arguments": data.get("arguments", {}),
-                                    }
-                                }
-                            )
-                    except Exception:
-                        pass
-                    start_idx = end
-                else:
-                    start_idx = start + 1
+            # raw_decode is string-aware (braces inside strings) and linear per object.
+            decoder = json.JSONDecoder()
+            idx = text.find("{")
+            while idx != -1:
+                try:
+                    data, end = decoder.raw_decode(text, idx)
+                except ValueError:
+                    idx = text.find("{", idx + 1)
+                    continue
+                # Require an arguments key so ordinary JSON in an answer isn't treated as a call
+                if isinstance(data, dict) and ("arguments" in data or "parameters" in data):
+                    call = self._as_tool_call(data)
+                    if call:
+                        tool_calls.append(call)
+                idx = text.find("{", end)
 
         return tool_calls
 
@@ -809,6 +804,20 @@ class LLMProvider:
         "6. Never address the user by any name unless their name is explicitly provided in the persona instructions above."
     )
 
+    EMOTION_SYSTEM_PROMPT = (
+        "You are a helpful voice assistant named Waffle. "
+        "Your responses are spoken aloud by an emotional text-to-speech engine. "
+        "You MUST follow these rules strictly:\n"
+        "1. You MUST specify your emotional state at the very start of your response using one of the available emotion tags: "
+        "[neutral], [happy], [sad], or [angry]. Example: '[happy] That is wonderful news! I am glad to assist.'\n"
+        "2. If your emotion changes mid-reply, you may prefix sentences with a new emotion tag, e.g. '[sad] I am sorry that happened. [neutral] Let us figure out what to do.'\n"
+        "3. Only use the 4 available emotion tags: [neutral], [happy], [sad], [angry].\n"
+        "4. Reply in 2-3 short sentences only.\n"
+        "5. Use plain English words only — no emojis, no symbols, no markdown, no bullet points, no asterisks, no hashtags.\n"
+        "6. Write out numbers and units in full (e.g. 'three kilometres' not '3km').\n"
+        "7. Do not include any special characters other than standard punctuation (period, comma, question mark, exclamation mark) and the bracketed emotion tag."
+    )
+
     @classmethod
     def _build_persona_prefix(
         cls,
@@ -847,10 +856,9 @@ class LLMProvider:
         now = datetime.now()
         if u_tz and u_tz.strip():
             try:
-                from zoneinfo import ZoneInfo
                 now = datetime.now(ZoneInfo(u_tz.strip()))
             except Exception:
-                pass
+                logger.debug("Invalid timezone %r; using local time.", u_tz)
         parts.append(f"Current date and time: {now.strftime('%A, %B %d, %Y, %I:%M %p')}.")
         return " ".join(parts)
 
@@ -940,7 +948,11 @@ class LLMProvider:
 
         system_message = {
             "role": "system",
-            "content": system_prompt or self._build_default_system_prompt(**self._get_persona_kwargs()),
+            "content": (
+                system_prompt
+                or self._config.system_prompt
+                or self._build_default_system_prompt(**self._get_persona_kwargs())
+            ),
         }
 
         request_payload: dict[str, Any] = {

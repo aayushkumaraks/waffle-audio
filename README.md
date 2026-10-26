@@ -161,7 +161,33 @@ uv run python install_tool.py --preset github     # GitHub repos & issues
 ```
 If no installed tool matches, Waffle automatically queries DuckDuckGo search and speaks the answer aloud with conversational bridge phrases. See [docs/tools-and-mcp.md](docs/tools-and-mcp.md).
 
-### 3. Headless HTTP API & Web App UI
+### 3. Emotional Voice Assistant (One-Click)
+
+Run the emotional voice assistant with dynamic emotion switching, thread-per-emotion models, in-memory caching, and idle offloading:
+
+```bash
+./run-with-emotion.sh
+```
+
+On Windows:
+```cmd
+run-with-emotion.bat
+```
+
+> [!WARNING]
+> **Status: Experimental & Unstable**
+> The multi-emotion voice assistant is an experimental feature currently under active development. Thread-per-emotion workers, prompt-based emotion state parsing, and memory offloading may exhibit instability depending on your local machine and Ollama model quantization.
+
+- **Gender Selection**: Select Female or Male at startup (or pass `--gender female` / `--gender male`).
+- **Emotions Supported**: `neutral`, `happy`, `sad`, `angry` (sourced from CREMA-D dataset).
+- **How It Works**:
+  1. Each emotion model (`.safetensors`) is loaded in its own background worker thread (`tts-worker-neutral`, `tts-worker-happy`, etc.) and cached in RAM.
+  2. The LLM is prompted to prepend emotional tags (`[happy]`, `[sad]`, `[angry]`, `[neutral]`).
+  3. `EmotionParser` strips the tags from spoken audio in real-time and routes each sentence chunk to the corresponding emotion thread.
+  4. Non-neutral models automatically offload their memory tensors if idle beyond `--offload-idle <seconds>`, keeping system RAM free and auto-reloading upon demand.
+- **Verbose Latency Profiling**: Pass `--verbose` or `-v` (e.g. `./run-with-emotion.sh --verbose`) to display a live latency timeline panel comparing turn latency against README target benchmarks, along with a turn breakdown on exit.
+
+### 4. Headless HTTP API & Web App UI
 Start the FastAPI backend service:
 ```bash
 uv run python -m services.api.app
@@ -174,7 +200,7 @@ bash ./tools/webapp/start.sh
 ```
 Or open `http://localhost:3000/ui` when the API server is running with the built bundle. See [tools/webapp/README.md](tools/webapp/README.md).
 
-### 4. Running Unit Tests
+### 5. Running Unit Tests
 Waffle Audio features a comprehensive 111-test suite with 100% pass rate:
 ```bash
 # Run complete test suite with pytest
@@ -191,6 +217,8 @@ uv run python -m unittest discover tests
 ```
 ├── run.sh                  # One-click installer & launcher (Linux/WSL)
 ├── run.bat                 # One-click launcher (Windows)
+├── run-with-emotion.sh     # Experimental multi-emotion launcher (Linux/WSL)
+├── run-with-emotion.bat    # Experimental multi-emotion launcher (Windows)
 ├── setup.py                # Interactive setup wizard with Ollama host detection
 ├── clone_voice.py          # Interactive voice cloning CLI
 ├── install_tool.py         # MCP tool installer & DuckDuckGo search tester

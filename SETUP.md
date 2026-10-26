@@ -56,8 +56,25 @@ PYTHONPATH=. uv run pytest tests/
 
 ---
 
-## 3. Detailed Documentation
+## 3. Emotional Voice Models Setup (Optional)
+
+Waffle Audio includes an experimental multi-emotion voice cloning system:
+1. Emotion clips (`voices/output/*.wav`) from the CREMA-D dataset provide audio prompts for 4 emotional states (`neutral`, `happy`, `sad`, `angry`) across female (actor 1003) and male (actor 1011) voices.
+2. Generate all emotion `.safetensors` models into `cloned_voices/`:
+```bash
+uv run python generate_emotion_voices.py
+```
+*(Note: `./run-with-emotion.sh` automatically checks and generates missing models on startup).*
+3. Run the emotional voice assistant:
+```bash
+./run-with-emotion.sh
+```
+
+---
+
+## 4. Detailed Documentation
 
 - **[Full Installation Guide](docs/setup.md)**: Prerequisites, PortAudio, WSLg audio, Ollama connection, and troubleshooting.
 - **[Configuration Reference](docs/configuration.md)**: Complete list of all `.env` options and default values.
 - **[Running Guide](docs/running.md)**: Starting the CLI, trigger mode, verbose profiling, and API server.
+- **[Voice Cloning Guide](docs/voice-cloning.md)**: Custom voice cloning and audio model setup.
