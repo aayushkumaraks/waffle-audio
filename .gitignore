@@ -6,3 +6,6 @@ node_modules/
 logs/
 cloned_voices/*.wav
 voices/
+.env
+.env.*
+!.env.example

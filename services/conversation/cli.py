@@ -8,57 +8,17 @@ import os
 import signal
 import threading
 import time
-
-import numpy as np
-import sounddevice as sd
 from rich.console import Console
-from rich.live import Live
-
-from services.audio.src import AudioPlayer
-from services.conversation.src import ConversationManager, ConversationUI
-from services.conversation.src.ui import (
-    README_TARGET_E2E,
-    README_TARGET_FIRST_TOKEN,
-    README_TARGET_GATE,
-    README_TARGET_LLM_FULL,
-    README_TARGET_TTS_FIRST,
-)
-from services.llm.src import LLMProvider, LLMProviderConfig, LLMService
-from services.stt.src import AudioQueueFull, STTService
-from services.tts.src import TTSConfig, TTSService
 
 # Suppress ONNX runtime logging
 os.environ.setdefault("ORT_LOGGING_LEVEL", "3")
 
 
-def _setup_logging() -> None:
-    """Redirect application logs to a file so the terminal UI stays completely clean."""
-    os.makedirs("logs", exist_ok=True)
-    file_handler = logging.FileHandler("logs/voicechat.log", encoding="utf-8")
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(
-        logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    )
+def _setup_logging(benchmark_enabled: bool | None = None) -> None:
+    """Redirect application and benchmark logs to logs/ directory with immediate flushing."""
+    from services.logging_config import setup_app_logging
+    setup_app_logging(benchmark_enabled=benchmark_enabled)
 
-    root = logging.getLogger()
-    root.setLevel(logging.INFO)
-    # Remove any existing console/stream handlers
-    for handler in list(root.handlers):
-        root.removeHandler(handler)
-    root.addHandler(file_handler)
-
-    # Silence verbose third-party loggers from console output
-    for name in [
-        "httpx",
-        "httpcore",
-        "onnxruntime",
-        "moonshine_voice",
-        "urllib3",
-        "services",
-        "pocket_tts",
-        "kokoro_onnx",
-    ]:
-        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 @contextlib.contextmanager
@@ -79,6 +39,11 @@ def _suppress_c_stderr():
 
 
 def main() -> None:
+    # 1. Start console and spinner IMMEDIATELY so the user gets instant feedback
+    console = Console()
+    status = console.status("[bold cyan]Initializing Waffle Audio pipeline...[/bold cyan]", spinner="dots")
+    status.start()
+
     parser = argparse.ArgumentParser(description="Waffle Audio Voice Assistant CLI")
     parser.add_argument(
         "-v",
@@ -87,16 +52,43 @@ def main() -> None:
         help="Display real-time turn timeline and compare latencies against README benchmarks",
     )
     parser.add_argument(
+        "--benchmark",
+        action="store_true",
+        default=os.getenv("BENCHMARK_ENABLED", "false").lower() in ("true", "1", "yes"),
+        help="Enable latency benchmarking, tool performance tracking, and session benchmark averages",
+    )
+    parser.add_argument(
         "--voice",
         type=str,
         default=os.getenv("VOICECHAT_TTS_VOICE"),
         help="Voice to use for TTS (predefined name, cloned voice name from cloned_voices/, or path to .safetensors)",
     )
+    parser.add_argument(
+        "--trigger-mode",
+        action="store_true",
+        default=os.getenv("VOICECHAT_TRIGGER_MODE", "false").lower() in ("true", "1", "yes"),
+        help="Only process and respond when the trigger word 'Hey ASSISTANT_NAME' is spoken",
+    )
     args, _ = parser.parse_known_args()
 
-    _setup_logging()
+    from constants import set_benchmark_enabled
+    set_benchmark_enabled(args.benchmark)
+    _setup_logging(args.benchmark)
     logger = logging.getLogger(__name__)
-    logger.info("Starting Waffle Audio CLI (verbose=%s, voice=%s)...", args.verbose, args.voice or "default")
+
+    # Pipe application and service logs to console during startup alongside spinner
+    class _StartupLogHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            try:
+                msg = self.format(record)
+                console.log(f"[dim]{msg}[/dim]")
+            except Exception:
+                pass
+
+    startup_log_handler = _StartupLogHandler()
+    startup_log_handler.setLevel(logging.INFO)
+    startup_log_handler.setFormatter(logging.Formatter("%(levelname)s [%(name)s]: %(message)s"))
+    logging.getLogger().addHandler(startup_log_handler)
 
     stop_event = threading.Event()
 
@@ -107,42 +99,179 @@ def main() -> None:
     if hasattr(signal, "SIGTERM"):
         signal.signal(signal.SIGTERM, handle_signal)
 
-    ui = ConversationUI(verbose=args.verbose)
-
-    # Initialize audio and conversation services
-    stt = STTService()
-    provider = LLMProvider(LLMProviderConfig())
-    llm = LLMService(provider)
-    tts = TTSService(TTSConfig(voice=args.voice))
-    player = AudioPlayer()
-
-    tts.add_listener(player)
-    manager = ConversationManager(stt=stt, llm=llm, tts=tts, on_user_turn=ui.on_user_turn)
-
-    # Wire UI listeners to real-time events
-    stt.add_listener(ui)
-    llm.add_listener(ui)
-    player.add_playback_listener(ui)
-
-    # Start backend services
-    player.start()
-    tts.start()
-    llm.start()
-    manager.start()
-    stt.start()
-
-    def audio_callback(indata, frames, time_info, status):
-        if player.is_playing:
-            return
-        try:
-            # Copy flattened audio to prevent buffer reuse race conditions
-            audio = indata.astype(np.float32).flatten()
-            stt.push(audio, 16000)
-        except AudioQueueFull:
-            pass
-
+    vad = None
+    stt = None
+    manager = None
+    llm = None
+    tts = None
+    player = None
     stream = None
+    ui = None
+    Live = None
+    README_TARGET_E2E = 2.10
+    README_TARGET_FIRST_TOKEN = 0.45
+    README_TARGET_GATE = 0.40
+    README_TARGET_LLM_FULL = 1.47
+    README_TARGET_TTS_FIRST = 1.82
+
     try:
+        console.log(
+            f"[bold cyan]Starting Waffle Audio CLI[/bold cyan] (verbose={args.verbose}, voice={args.voice or 'default'})"
+        )
+        logger.info("Starting Waffle Audio CLI (verbose=%s, voice=%s)...", args.verbose, args.voice or "default")
+
+        status.update("[bold cyan]Loading core drivers & constants...[/bold cyan]")
+        import numpy as np
+        import sounddevice as sd
+        from rich.live import Live as _Live
+        Live = _Live
+        from constants import (
+            AEC_ENABLED,
+            ASSISTANT_NAME,
+            AUDIO_INPUT_DEVICE,
+            BARGE_IN_ENABLED,
+            OLLAMA_MODEL,
+            TRIGGER_MODE,
+        )
+        console.log("[green]✓[/green] Core audio drivers loaded")
+
+        # Initialize audio and conversation services
+        status.update("[bold cyan]Initializing Voice Activity Detection (VAD) & Echo Cancellation...[/bold cyan]")
+        from services.audio_processing.src import (
+            AcousticEchoCanceller,
+            BargeInController,
+            VADConfig,
+            VADService,
+        )
+        vad = VADService(VADConfig(min_silence_duration_ms=200, pre_speech_padding_ms=200))
+        aec = AcousticEchoCanceller()
+        console.log("[green]✓[/green] VAD & Echo Cancellation initialized")
+
+        status.update("[bold cyan]Initializing Speech-to-Text (Moonshine ONNX)...[/bold cyan]")
+        from services.stt.src import AudioQueueFull, STTService
+        stt = STTService()
+        console.log("[green]✓[/green] STT Service initialized")
+
+        status.update(f"[bold cyan]Connecting to LLM ({OLLAMA_MODEL}) & loading MCP tools...[/bold cyan]")
+        from services.llm.src import LLMProvider, LLMProviderConfig, LLMService
+        provider = LLMProvider(LLMProviderConfig())
+        llm = LLMService(provider)
+        tool_count = len(provider.tool_manager.get_ollama_tools())
+        console.log(f"[green]✓[/green] LLM Service initialized (model: {OLLAMA_MODEL}, tools available: {tool_count})")
+
+
+        status.update("[bold cyan]Loading Text-to-Speech engine...[/bold cyan]")
+        from services.tts.src import TTSConfig, TTSService
+        tts = TTSService(TTSConfig(voice=args.voice))
+        console.log("[green]✓[/green] TTS Service initialized")
+
+        status.update("[bold cyan]Initializing Audio Playback system...[/bold cyan]")
+        from services.audio.src import AudioPlayer
+        player = AudioPlayer()
+        player.set_upstream_busy(lambda: getattr(tts, "is_busy", False))
+        player.add_playback_monitor(aec.feed_reference)
+        tts.add_listener(player)
+        provider.set_tts(tts)
+        console.log("[green]✓[/green] Audio Player & Filler Phrases initialized")
+
+
+        status.update("[bold cyan]Wiring Conversation Pipeline & Barge-In Controller...[/bold cyan]")
+        from services.conversation.src import ConversationManager, ConversationUI
+        from services.conversation.src.ui import (
+            README_TARGET_E2E as _E2E,
+            README_TARGET_FIRST_TOKEN as _FT,
+            README_TARGET_GATE as _GATE,
+            README_TARGET_LLM_FULL as _LF,
+            README_TARGET_TTS_FIRST as _TF,
+        )
+        README_TARGET_E2E = _E2E
+        README_TARGET_FIRST_TOKEN = _FT
+        README_TARGET_GATE = _GATE
+        README_TARGET_LLM_FULL = _LF
+        README_TARGET_TTS_FIRST = _TF
+
+        is_trigger_mode = bool(args.trigger_mode or TRIGGER_MODE)
+        if is_trigger_mode:
+            console.log(
+                f"[yellow]Trigger mode ACTIVE[/yellow]: Assistant will only respond when 'Hey {ASSISTANT_NAME}' is spoken"
+            )
+            logger.info("Trigger mode active (trigger word: 'Hey %s')", ASSISTANT_NAME)
+
+        ui = ConversationUI(
+            verbose=args.verbose,
+            trigger_mode=is_trigger_mode,
+            assistant_name=ASSISTANT_NAME,
+            benchmark_enabled=args.benchmark,
+        )
+        manager = ConversationManager(
+            stt=stt,
+            llm=llm,
+            tts=tts,
+            on_user_turn=ui.on_user_turn,
+            trigger_mode=is_trigger_mode,
+            assistant_name=ASSISTANT_NAME,
+            on_user_turn_ignored=ui.on_user_turn_ignored,
+        )
+        barge_in = BargeInController(
+            player=player,
+            manager=manager,
+            tts=tts,
+            llm=llm,
+            on_barge_in=ui.on_barge_in,
+        )
+        barge_in.enabled = BARGE_IN_ENABLED
+        vad.add_listener(barge_in)
+
+        stt.add_listener(ui)
+        llm.add_listener(ui)
+        player.add_playback_listener(ui)
+        console.log("[green]✓[/green] Real-time event listeners wired")
+
+        # Start backend services
+        status.update("[bold cyan]Starting Voice Activity Detection worker...[/bold cyan]")
+        vad.start()
+        console.log("[green]✓[/green] VAD service started")
+
+        status.update("[bold cyan]Starting Audio Player worker...[/bold cyan]")
+        player.start()
+        console.log("[green]✓[/green] Audio Player started")
+
+        status.update("[bold cyan]Starting TTS engine (loading models & voices)...[/bold cyan]")
+        tts.start()
+        console.log("[green]✓[/green] TTS service started")
+
+        status.update("[bold cyan]Starting LLM worker thread...[/bold cyan]")
+        llm.start()
+        console.log("[green]✓[/green] LLM service started")
+
+        status.update("[bold cyan]Starting Conversation Manager...[/bold cyan]")
+        manager.start()
+        console.log("[green]✓[/green] Conversation Manager started")
+
+        status.update("[bold cyan]Starting STT engine (loading Moonshine model)...[/bold cyan]")
+        stt.start()
+        console.log("[green]✓[/green] STT service started")
+
+        def audio_callback(indata, frames, time_info, status_flag):
+            if not BARGE_IN_ENABLED and player.is_playing:
+                return
+            try:
+                audio = indata.astype(np.float32).flatten()
+                if BARGE_IN_ENABLED and AEC_ENABLED:
+                    cleaned = aec.process(audio, 16000)
+                else:
+                    cleaned = audio
+
+                if BARGE_IN_ENABLED:
+                    vad.process(cleaned, 16000)
+
+                stt.push(cleaned, 16000)
+            except AudioQueueFull:
+                pass
+            except Exception:
+                logger.exception("Error in CLI audio callback.")
+
+        status.update("[bold cyan]Opening microphone input stream (16 kHz)...[/bold cyan]")
         with _suppress_c_stderr():
             stream = sd.InputStream(
                 samplerate=16000,
@@ -150,11 +279,20 @@ def main() -> None:
                 dtype="float32",
                 blocksize=512,
                 callback=audio_callback,
+                device=AUDIO_INPUT_DEVICE,
             )
             stream.start()
+        console.log("[green]✓[/green] Microphone audio stream active")
 
+        status.update("[bold green]All services ready. Launching UI...[/bold green]")
+        time.sleep(0.3)
+    finally:
+        # Take the spinner off and detach console log handler once initialization completes
+        logging.getLogger().removeHandler(startup_log_handler)
+        status.stop()
+
+    try:
         # Run alternate screen live UI with 10 Hz refresh
-        console = Console()
         with Live(ui.render(0, console=console), console=console, screen=True, refresh_per_second=10) as live:
             frame = 0
             while not stop_event.is_set():
@@ -175,11 +313,18 @@ def main() -> None:
             except Exception:
                 pass
 
-        stt.stop()
-        manager.stop()
-        llm.stop()
-        tts.stop()
-        player.stop()
+        if vad is not None:
+            vad.stop()
+        if stt is not None:
+            stt.stop()
+        if manager is not None:
+            manager.stop()
+        if llm is not None:
+            llm.stop()
+        if tts is not None:
+            tts.stop()
+        if player is not None:
+            player.stop()
 
         # Print clean conversation summary after restoring normal terminal
         print("\n" + "=" * 70)
@@ -193,15 +338,23 @@ def main() -> None:
                 role_label = "You" if msg["role"] == "user" else "Waffle"
                 print(f"{idx}. [{role_label}] {msg['text']}")
 
-        if args.verbose and ui.benchmarks:
+        # Output benchmark summary and log to logs/ (only if --benchmark is set)
+        if args.benchmark and ui is not None and hasattr(ui, "benchmark_tracker") and ui.benchmark_tracker.enabled:
+            summary_card = ui.benchmark_tracker.log_session_summary()
+            if ui.benchmarks:
+                print("\n" + summary_card)
+                print("[dim]Detailed records appended to logs/voicechat.log, logs/benchmark.log, and logs/benchmarks.jsonl[/dim]\n")
+
+        if args.benchmark and args.verbose and ui.benchmarks:
             print("\n" + "=" * 70)
-            print("LATENCY TIMELINE & README BENCHMARK COMPARISON")
+            print("PER-TURN LATENCY TIMELINE & README BENCHMARK COMPARISON")
             print("=" * 70)
             print(
                 f"README Reference: Warm Turn E2E = {README_TARGET_E2E}s | Cold Start = 6.8s | Before Opt = 3.3s\n"
             )
             for i, bm in enumerate(ui.benchmarks, start=1):
-                print(f"Turn #{i}:")
+                turn_type_str = f" [{bm.get('turn_type', 'conversation').upper().replace('_', ' ')}]" if bm.get('turn_type') else ""
+                print(f"Turn #{i}{turn_type_str}:")
                 print(f"  User       : \"{bm['user_text']}\"")
                 print(f"  Assistant  : \"{bm['assistant_text']}\"")
                 print("  Timeline Breakdown:")
@@ -211,6 +364,11 @@ def main() -> None:
                 print(
                     f"    2. LLM First Token    : {bm['first_token_dur']:5.2f}s  (Target: {README_TARGET_FIRST_TOKEN:4.2f}s  |  Δ {bm['first_token_dur'] - README_TARGET_FIRST_TOKEN:+.2f}s)"
                 )
+                if bm.get("total_tool_dur"):
+                    tools_desc = ", ".join(t.get("name", "tool") for t in bm.get("tools", [])) or "tool"
+                    print(
+                        f"    ↳ Tool Execution      : {bm['total_tool_dur']:5.2f}s  ({tools_desc})"
+                    )
                 print(
                     f"    3. LLM Full Reply     : {bm['full_llm_dur']:5.2f}s  (Target: {README_TARGET_LLM_FULL:4.2f}s  |  Δ {bm['full_llm_dur'] - README_TARGET_LLM_FULL:+.2f}s)"
                 )
@@ -224,6 +382,7 @@ def main() -> None:
 
         print("=" * 70)
         print("Waffle Audio stopped cleanly.\n")
+
 
 
 if __name__ == "__main__":

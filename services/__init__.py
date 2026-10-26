@@ -1,58 +1,47 @@
-"""Public exports for all services."""
+"""Public exports for all services with lazy loading for fast startup and low overhead."""
 
-from .stt.src import (
-    AudioQueueFull,
-    STTConfig,
-    STTListener,
-    STTService,
-    STTServiceError,
-)
-from .llm.src import (
-    LLMCallbacks,
-    LLMListener,
-    LLMProvider,
-    LLMProviderConfig,
-    LLMProviderError,
-    LLMService,
-    LLMServiceError,
-)
-from .tts.src import (
-    SpeechQueueFull,
-    TTSConfig,
-    TTSListener,
-    TTSService,
-    TTSServiceError,
-)
+import importlib
+from typing import Any
 
-from .audio.src import (
-    AudioPlayer,
-)
-
-from .conversation.src import ConversationManager
-
-__all__ = [
+_LAZY_EXPORTS: dict[str, tuple[str, str]] = {
     # Audio
-    "AudioPlayer",
+    "AudioPlayer": (".audio.src", "AudioPlayer"),
     # STT
-    "AudioQueueFull",
-    "STTConfig",
-    "STTListener",
-    "STTService",
-    "STTServiceError",
+    "AudioQueueFull": (".stt.src", "AudioQueueFull"),
+    "STTConfig": (".stt.src", "STTConfig"),
+    "STTListener": (".stt.src", "STTListener"),
+    "STTService": (".stt.src", "STTService"),
+    "STTServiceError": (".stt.src", "STTServiceError"),
     # LLM
-    "LLMCallbacks",
-    "LLMListener",
-    "LLMProvider",
-    "LLMProviderConfig",
-    "LLMProviderError",
-    "LLMService",
-    "LLMServiceError",
+    "LLMCallbacks": (".llm.src", "LLMCallbacks"),
+    "LLMListener": (".llm.src", "LLMListener"),
+    "LLMProvider": (".llm.src", "LLMProvider"),
+    "LLMProviderConfig": (".llm.src", "LLMProviderConfig"),
+    "LLMProviderError": (".llm.src", "LLMProviderError"),
+    "LLMService": (".llm.src", "LLMService"),
+    "LLMServiceError": (".llm.src", "LLMServiceError"),
     # TTS
-    "SpeechQueueFull",
-    "TTSConfig",
-    "TTSListener",
-    "TTSService",
-    "TTSServiceError",
+    "SpeechQueueFull": (".tts.src", "SpeechQueueFull"),
+    "TTSConfig": (".tts.src", "TTSConfig"),
+    "TTSListener": (".tts.src", "TTSListener"),
+    "TTSService": (".tts.src", "TTSService"),
+    "TTSServiceError": (".tts.src", "TTSServiceError"),
     # Conversation
-    "ConversationManager",
-]
+    "ConversationManager": (".conversation.src", "ConversationManager"),
+    # Unified Pipeline & IPC
+    "UnifiedPipeline": (".pipeline", "UnifiedPipeline"),
+    "SharedAudioBuffer": (".shared_memory", "SharedAudioBuffer"),
+}
+
+__all__ = list(_LAZY_EXPORTS.keys())
+
+
+def __getattr__(name: str) -> Any:
+    if name in _LAZY_EXPORTS:
+        module_path, attr_name = _LAZY_EXPORTS[name]
+        module = importlib.import_module(module_path, __name__)
+        val = getattr(module, attr_name)
+        globals()[name] = val
+        return val
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+

@@ -3,7 +3,10 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterator
 import numpy as np
-from kokoro_onnx import Kokoro
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from kokoro_onnx import Kokoro
 from constants import KOKORO_DEFAULT_LANGUAGE, KOKORO_DEFAULT_VOICE
 from .base_tts_service import BaseTTSService
 from .tts_types import AudioBuffer, TTSConfig
@@ -11,6 +14,7 @@ class KokoroTTSService(BaseTTSService):
     def __init__(self, config: TTSConfig) -> None:
         super().__init__(config); self._engine: Kokoro | None = None
     def _load_engine(self) -> None:
+        from kokoro_onnx import Kokoro
         self._engine = Kokoro(model_path=self._config.model_path, voices_path=self._config.voices_path)
     def _unload_engine(self) -> None: self._engine = None
     def _stream_audio(self, text: str) -> tuple[Iterator[AudioBuffer], int]:

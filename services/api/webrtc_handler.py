@@ -25,7 +25,7 @@ from aiortc import (
 )
 from aiortc.mediastreams import AudioStreamTrack
 
-from services.audio_processing.src import VADService
+from services.audio_processing.src import VADService, resample_audio
 from services.stt.src.stt_service import AudioQueueFull, STTService
 from services.tts.src.tts_service import AudioBuffer, TTSListener
 
@@ -109,14 +109,7 @@ def _resample(
     src: int,
     dst: int,
 ) -> npt.NDArray[np.float32]:
-    if src == dst:
-        return audio
-    n_out = max(1, round(len(audio) * dst / src))
-    return np.interp(
-        np.linspace(0, len(audio) - 1, n_out),
-        np.arange(len(audio)),
-        audio,
-    ).astype(np.float32)
+    return resample_audio(audio, src, dst)
 
 
 def _frame_to_float32_mono(frame: av.AudioFrame) -> npt.NDArray[np.float32]:
@@ -136,10 +129,15 @@ def _frame_to_float32_mono(frame: av.AudioFrame) -> npt.NDArray[np.float32]:
 class TTSOutputTrack(AudioStreamTrack, TTSListener):
     """Streams selected TTS-backend audio to the browser via WebRTC."""
 
-    def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        aec: Optional[Any] = None,
+    ) -> None:
         AudioStreamTrack.__init__(self)
         self._loop = loop
         self._buffer = np.array([], dtype=np.float32)
+        self._aec = aec
 
     def on_synthesis_started(self) -> None:
         pass
@@ -148,6 +146,8 @@ class TTSOutputTrack(AudioStreamTrack, TTSListener):
         pass
 
     def on_audio_chunk(self, audio: AudioBuffer, sample_rate: int) -> None:
+        if self._aec is not None and hasattr(self._aec, "feed_reference"):
+            self._aec.feed_reference(audio, sample_rate)
         self._loop.call_soon_threadsafe(self._ingest, audio.copy(), sample_rate)
 
     def _ingest(
@@ -182,8 +182,9 @@ async def _receive_browser_audio(
     track: MediaStreamTrack,
     stt: STTService,
     vad: VADService,
+    aec: Optional[Any] = None,
 ) -> None:
-    """Continuously read browser audio, gate it with VAD, then push to STT."""
+    """Continuously read browser audio, cancel echo, gate with VAD, then push to STT."""
     try:
         while True:
             try:
@@ -193,6 +194,9 @@ async def _receive_browser_audio(
 
             samples = _frame_to_float32_mono(frame)
             samples_16k = _resample(samples, frame.sample_rate, _STT_RATE)
+
+            if aec is not None and hasattr(aec, "process"):
+                samples_16k = aec.process(samples_16k, _STT_RATE)
 
             try:
                 speech_audio = vad.process(samples_16k, _STT_RATE)
@@ -217,20 +221,31 @@ async def create_answer(
     tts,
     stt: STTService,
     vad: VADService,
+    conversation: Any = None,
+    aec: Any = None,
 ) -> dict[str, str]:
     """Accept a browser offer and return an SDP answer with gathered ICE candidates."""
     loop = asyncio.get_running_loop()
     pc = RTCPeerConnection(RTCConfiguration(iceServers=_ice_servers()))
     _peer_connections.add(pc)
 
-    tts_track = TTSOutputTrack(loop=loop)
+    if aec is None:
+        from services.audio_processing.src import AcousticEchoCanceller
+        aec = AcousticEchoCanceller()
+
+    tts_track = TTSOutputTrack(loop=loop, aec=aec)
     tts.add_listener(tts_track)
     pc.addTrack(tts_track)
+
+    if conversation is not None:
+        from services.audio_processing.src import BargeInController
+        barge_in = BargeInController(manager=conversation, tts=tts)
+        vad.add_listener(barge_in)
 
     @pc.on("track")
     async def on_track(track: MediaStreamTrack) -> None:
         if track.kind == "audio":
-            asyncio.create_task(_receive_browser_audio(track, stt, vad))
+            asyncio.create_task(_receive_browser_audio(track, stt, vad, aec))
 
     @pc.on("connectionstatechange")
     async def on_state_change() -> None:
@@ -238,6 +253,7 @@ async def create_answer(
         if pc.connectionState in ("failed", "closed", "disconnected"):
             tts.remove_listener(tts_track)
             _peer_connections.discard(pc)
+
 
     try:
         await pc.setRemoteDescription(RTCSessionDescription(sdp=sdp, type=sdp_type))

@@ -103,7 +103,9 @@ class TestVoiceCloning(unittest.TestCase):
                 mock_engine.sample_rate = 24000
                 mock_engine.get_state_for_audio_prompt.return_value = {"state": "mock"}
 
-                with patch("pocket_tts.TTSModel.load_model", return_value=mock_engine):
+                mock_pocket = MagicMock()
+                mock_pocket.TTSModel.load_model.return_value = mock_engine
+                with patch.dict("sys.modules", {"pocket_tts": mock_pocket}):
                     service._load_engine()
 
                 mock_engine.get_state_for_audio_prompt.assert_called_once_with(str(cloned_file.resolve()))

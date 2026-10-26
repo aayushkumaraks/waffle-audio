@@ -156,6 +156,9 @@ class ServiceRuntime:
 
     @classmethod
     def create(cls) -> "ServiceRuntime":
+        from services.logging_config import setup_app_logging
+        setup_app_logging()
+
         stt = STTService(STTConfig())
         vad = VADService()
 
@@ -217,13 +220,18 @@ _llm_request_lock = threading.Lock()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    runtime.start()
+    import os
+
+    if not os.getenv("TESTING"):
+        runtime.start()
 
     try:
         yield
     finally:
         await _webrtc_close_all()
-        runtime.stop()
+        if not os.getenv("TESTING"):
+            runtime.stop()
+
 
 
 app = FastAPI(
@@ -350,7 +358,24 @@ class WebRTCOfferRequest(BaseModel):
 @app.post("/webrtc/offer")
 async def webrtc_offer(offer: WebRTCOfferRequest) -> dict[str, str]:
     """Exchange SDP: accept a browser offer and return the server answer."""
-    return await _webrtc_create_answer(offer.sdp, offer.type, runtime.tts, runtime.stt, runtime.vad)
+    return await _webrtc_create_answer(
+        offer.sdp,
+        offer.type,
+        runtime.tts,
+        runtime.stt,
+        runtime.vad,
+        conversation=runtime.conversation,
+    )
+
+
+@app.post("/conversation/barge-in")
+def trigger_barge_in() -> dict[str, str]:
+    """Instantly interrupt assistant speech and ongoing LLM generation."""
+    runtime.player.interrupt()
+    runtime.conversation.barge_in()
+    runtime.tts.interrupt()
+    return {"status": "interrupted"}
+
 
 
 @app.get("/audio/status")

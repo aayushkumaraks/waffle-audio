@@ -3,12 +3,12 @@
 import time
 
 import numpy as np
-from pocket_tts import TTSModel
 
 from constants import POCKET_TTS_DEFAULT_LANGUAGE, POCKET_TTS_DEFAULT_VOICE
 
 
 def main() -> None:
+    from pocket_tts import TTSModel
     print("Loading Pocket TTS...")
     init_start = time.perf_counter()
     model = TTSModel.load_model(language=POCKET_TTS_DEFAULT_LANGUAGE)

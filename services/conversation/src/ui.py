@@ -15,6 +15,7 @@ from rich.text import Text
 from services.audio.src import AudioPlaybackListener
 from services.llm.src import LLMListener
 from services.stt.src import STTListener
+from .benchmark import BenchmarkTracker, get_benchmark_tracker
 
 StatusType = Literal["READY", "LISTENING", "PROCESSING"]
 
@@ -39,8 +40,23 @@ def _format_diff(observed: float, target: float) -> str:
 class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
     """Thread-safe UI controller and renderer for the terminal voice interface."""
 
-    def __init__(self, verbose: bool = False) -> None:
+    def __init__(
+        self,
+        verbose: bool = False,
+        trigger_mode: bool = False,
+        assistant_name: str = "Waffle",
+        benchmark_tracker: BenchmarkTracker | None = None,
+        benchmark_enabled: bool | None = None,
+    ) -> None:
         self._verbose = verbose
+        self._trigger_mode = trigger_mode
+        self._assistant_name = assistant_name.strip() if assistant_name else "Waffle"
+        if benchmark_tracker is not None:
+            self._benchmark_tracker = benchmark_tracker
+            if benchmark_enabled is not None:
+                self._benchmark_tracker.enabled = bool(benchmark_enabled)
+        else:
+            self._benchmark_tracker = get_benchmark_tracker(enabled=benchmark_enabled)
         self._lock = threading.Lock()
         self._status: StatusType = "READY"
         self._history: list[dict[str, str]] = []
@@ -50,6 +66,10 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
         self._user_fragments: list[str] = []
         self._llm_generated_text: str = ""
         self._is_generating: bool = False
+        self._active_tool: str | None = None
+        self._active_tool_args: dict | None = None
+        self._active_phrase: str | None = None
+        self._t_tool_start: float | None = None
 
         # Latency tracking timestamps
         self._t_speech_start: float | None = None
@@ -59,6 +79,7 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
         self._t_llm_done: float | None = None
         self._t_playback_start: float | None = None
         self._t_playback_end: float | None = None
+
 
         self._latest_benchmark: dict | None = None
         self._benchmarks: list[dict] = []
@@ -108,6 +129,10 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
     def latest_benchmark(self) -> dict | None:
         with self._lock:
             return self._latest_benchmark.copy() if self._latest_benchmark else None
+
+    @property
+    def benchmark_tracker(self) -> BenchmarkTracker:
+        return self._benchmark_tracker
 
     def sync_audio_playback(self, is_playing: bool) -> None:
         """Called by the main loop to reconcile status when audio is playing or done."""
@@ -159,8 +184,28 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
         clean_text = text.strip()
         with self._lock:
             if clean_text:
-                self._pending_user_turn = clean_text
-                self._current_user = clean_text
+                self._status = "PROCESSING"
+                self._is_generating = True
+                self._benchmark_tracker.clear_turn_tools()
+                self._t_gate_fired = time.perf_counter()
+                self._history.append({"role": "user", "text": clean_text})
+                self._pending_user_turn = ""
+                self._user_fragments.clear()
+                self._current_user = ""
+                self._current_assistant = ""
+                self._llm_generated_text = ""
+
+    def on_user_turn_ignored(self, text: str) -> None:
+        """Called when an utterance is ignored (e.g. trigger word missing in trigger mode)."""
+        with self._lock:
+            self._status = "READY"
+            self._is_generating = False
+            self._pending_user_turn = ""
+            self._user_fragments.clear()
+            self._current_user = ""
+            self._current_assistant = ""
+            self._t_speech_start = None
+            self._t_speech_end = None
 
     # ------------------------------------------------------------------
     # LLM Listener callbacks
@@ -171,18 +216,20 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
             now = time.perf_counter()
             self._status = "PROCESSING"
             self._is_generating = True
-            self._t_gate_fired = now
+            if self._t_gate_fired is None:
+                self._t_gate_fired = now
             self._t_first_token = None
             self._t_llm_done = None
             self._t_playback_start = None
             self._t_playback_end = None
 
+            # Fallback if on_user_turn was not invoked (e.g. direct LLM test)
             final_user = (
                 self._pending_user_turn.strip()
                 or " ".join(self._user_fragments).strip()
                 or self._current_user.strip()
             )
-            if final_user:
+            if final_user and (not self._history or self._history[-1].get("text") != final_user):
                 self._history.append({"role": "user", "text": final_user})
             self._pending_user_turn = ""
             self._user_fragments.clear()
@@ -202,8 +249,52 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
         with self._lock:
             now = time.perf_counter()
             self._is_generating = False
+            self._active_tool = None
             self._t_llm_done = now
             self._llm_generated_text = text.strip() or self._llm_generated_text.strip()
+
+    def on_tool_started(
+        self, tool_name: str, arguments: dict, phrase: str | None = None
+    ) -> None:
+        with self._lock:
+            self._active_tool = tool_name
+            self._active_tool_args = arguments
+            self._active_phrase = phrase
+            self._status = "PROCESSING"
+            self._t_tool_start = time.perf_counter()
+            if phrase:
+                self._benchmark_tracker.record_filler_phrase(phrase)
+
+    def on_tool_completed(
+        self,
+        tool_name: str,
+        result: str,
+        duration: float = 0.0,
+        fallback: bool = False,
+        server: str = "mcp",
+    ) -> None:
+        with self._lock:
+            self._active_tool = None
+            args = self._active_tool_args or {}
+            self._active_tool_args = None
+            self._active_phrase = None
+            now = time.perf_counter()
+            tool_dur = duration if duration > 0.0 else ((now - self._t_tool_start) if self._t_tool_start else 0.0)
+            status = "ERROR" if ("error" in result.lower() and "no error" not in result.lower()) else "SUCCESS"
+            self._benchmark_tracker.record_tool_execution(
+                name=tool_name,
+                arguments=args,
+                duration=tool_dur,
+                fallback=fallback,
+                server=server,
+                status=status,
+                result_len=len(result),
+                result_preview=result[:120] if result else "",
+            )
+
+    def record_followup_llm(self, first_token_dur: float, full_dur: float) -> None:
+        with self._lock:
+            self._benchmark_tracker.record_followup_llm(first_token_dur, full_dur)
 
     # ------------------------------------------------------------------
     # Audio Playback Listener callbacks
@@ -223,52 +314,114 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
 
     def on_playback_completed(self) -> None:
         with self._lock:
+            if self._is_generating:
+                # Playback drained while the LLM is still streaming the next
+                # clause; the response turn is not over yet.
+                return
             now = time.perf_counter()
             self._t_playback_end = now
             full_text = self._current_assistant.strip() or self._llm_generated_text.strip()
             if full_text:
                 self._history.append({"role": "assistant", "text": full_text})
 
-            # Calculate and record benchmark metrics
-            last_user_text = (
-                self._history[-2]["text"] if len(self._history) >= 2 else "Unknown"
-            )
+                # Record benchmark metrics only if real playback occurred
+                if self._t_playback_start is not None:
+                    last_user_text = (
+                        self._history[-2]["text"] if len(self._history) >= 2 else "Unknown"
+                    )
 
-            t_speech_end = self._t_speech_end or (self._t_gate_fired or now)
-            t_gate = self._t_gate_fired or t_speech_end
-            gate_dur = max(0.0, t_gate - t_speech_end)
+                    t_speech_end = self._t_speech_end or (self._t_gate_fired or now)
+                    t_gate = self._t_gate_fired or t_speech_end
+                    gate_dur = max(0.0, t_gate - t_speech_end)
 
-            t_first_tok = self._t_first_token or t_gate
-            first_tok_dur = max(0.0, t_first_tok - t_gate)
+                    t_first_tok = self._t_first_token or t_gate
+                    first_tok_dur = max(0.0, t_first_tok - t_gate)
 
-            t_llm_done = self._t_llm_done or (t_first_tok + 1.0)
-            llm_full_dur = max(0.0, t_llm_done - t_gate)
+                    t_llm_done = self._t_llm_done or (t_first_tok + 1.0)
+                    llm_full_dur = max(0.0, t_llm_done - t_gate)
 
-            t_play_start = self._t_playback_start or now
-            tts_first_dur = max(0.0, t_play_start - t_gate)
-            e2e_dur = max(0.0, t_play_start - t_speech_end)
-            total_dur = max(0.0, now - t_speech_end)
+                    t_play_start = self._t_playback_start
+                    tts_first_dur = max(0.0, t_play_start - t_gate)
+                    e2e_dur = max(0.0, t_play_start - t_speech_end)
+                    total_dur = max(0.0, now - t_speech_end)
 
-            benchmark = {
-                "user_text": last_user_text,
-                "assistant_text": full_text,
-                "gate_dur": gate_dur,
-                "first_token_dur": first_tok_dur,
-                "full_llm_dur": llm_full_dur,
-                "tts_first_dur": tts_first_dur,
-                "e2e_dur": e2e_dur,
-                "total_dur": total_dur,
-            }
-            self._latest_benchmark = benchmark
-            self._benchmarks.append(benchmark)
+                    speech_dur = (
+                        max(0.0, self._t_speech_end - self._t_speech_start)
+                        if (self._t_speech_end and self._t_speech_start)
+                        else 0.0
+                    )
+
+                    metric = self._benchmark_tracker.record_turn(
+                        user_text=last_user_text,
+                        assistant_text=full_text,
+                        gate_dur=gate_dur,
+                        first_token_dur=first_tok_dur,
+                        full_llm_dur=llm_full_dur,
+                        tts_first_dur=tts_first_dur,
+                        e2e_dur=e2e_dur,
+                        total_dur=total_dur,
+                        speech_duration=speech_dur,
+                    )
+
+                    benchmark = {
+                        "user_text": last_user_text,
+                        "assistant_text": full_text,
+                        "gate_dur": gate_dur,
+                        "first_token_dur": first_tok_dur,
+                        "full_llm_dur": llm_full_dur,
+                        "tts_first_dur": tts_first_dur,
+                        "e2e_dur": e2e_dur,
+                        "total_dur": total_dur,
+                        "turn_type": metric.turn_type,
+                        "total_tool_dur": metric.total_tool_dur,
+                        "tools": [
+                            {
+                                "name": t.name,
+                                "duration": t.duration,
+                                "fallback": t.fallback,
+                                "server": t.server,
+                                "status": t.status,
+                            }
+                            for t in metric.tools
+                        ],
+                        "filler_phrase": metric.filler_phrase,
+                    }
+                    self._latest_benchmark = benchmark
+                    self._benchmarks.append(benchmark)
 
             self._current_assistant = ""
             self._llm_generated_text = ""
             self._t_speech_start = None
+            self._t_speech_end = None
+            self._t_playback_start = None
             self._user_fragments.clear()
             self._pending_user_turn = ""
             self._current_user = ""
             self._status = "READY"
+
+    def on_barge_in(self) -> None:
+        """Called when the user interrupts the assistant mid-response.
+
+        Commits whatever was already spoken (marked as cut off), clears the
+        in-flight response state, and does not record a benchmark entry.
+        """
+        with self._lock:
+            spoken = self._current_assistant.strip()
+            if spoken:
+                self._history.append({"role": "assistant", "text": f"{spoken} …"})
+            self._current_assistant = ""
+            self._llm_generated_text = ""
+            self._is_generating = False
+            self._benchmark_tracker.clear_turn_tools()
+            self._t_gate_fired = None
+            self._t_first_token = None
+            self._t_llm_done = None
+            self._t_playback_start = None
+            self._t_playback_end = None
+            self._t_speech_start = None
+            self._t_speech_end = None
+            self._status = "LISTENING"
+
 
     # ------------------------------------------------------------------
     # Rich Layout Renderer
@@ -283,6 +436,10 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
             is_generating = self._is_generating
             latest_bm = self._latest_benchmark.copy() if self._latest_benchmark else None
             verbose = self._verbose
+            active_tool = self._active_tool
+            active_phrase = self._active_phrase
+            trigger_mode = self._trigger_mode
+            assistant_name = self._assistant_name
 
         layout = Layout()
         if verbose:
@@ -313,17 +470,20 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
         title_text.append(" 🧇 WAFFLE AUDIO CLI ", style="bold bright_white on dark_blue")
         title_text.append(f"  {current_wave}\n", style="bold cyan")
         title_text.append(" Real-Time Voice Assistant • Local & Private", style="dim italic")
+        if trigger_mode:
+            title_text.append(f"  [TRIGGER: Hey {assistant_name}]", style="bold yellow")
         if verbose:
             title_text.append("  [VERBOSE TIMELINE ACTIVE]", style="bold magenta")
         layout["title"].update(Panel(title_text, border_style="blue", padding=(0, 1)))
 
         # --- Right Header: Status box (Pinned Top-Right Corner) ---
         if status == "READY":
+            ready_sub = f"Say 'Hey {assistant_name}'..." if trigger_mode else "Awaiting speech..."
             status_panel = Panel(
                 Align.center(
                     Text.from_markup(
                         "[bold bright_white on dark_green]   ● READY   [/]\n"
-                        "[dim green]Awaiting speech...[/dim green]"
+                        f"[dim green]{ready_sub}[/dim green]"
                     )
                 ),
                 border_style="bright_green",
@@ -343,17 +503,26 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
                 title_align="right",
             )
         else:  # PROCESSING
+            if active_phrase:
+                subtext = f"[bold magenta]⚡ {active_phrase}[/]"
+            elif active_tool:
+                subtext = f"[bold magenta]⚡ {active_tool}[/]"
+            else:
+                subtext = "[bold yellow]Thinking & speaking[/]"
+
             status_panel = Panel(
                 Align.center(
                     Text.from_markup(
                         f"[bold black on dark_orange] {spin} PROCESSING [/]\n"
-                        "[bold yellow]Thinking & speaking[/]"
+                        f"{subtext}"
                     )
                 ),
                 border_style="bright_yellow",
                 title="[bold yellow]STATUS[/]",
                 title_align="right",
             )
+
+
 
         layout["status_box"].update(status_panel)
 
@@ -467,6 +636,14 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
                     f"{README_TARGET_TTS_FIRST:.2f} s",
                     _format_diff(latest_bm['tts_first_dur'], README_TARGET_TTS_FIRST),
                 )
+                if latest_bm.get("turn_type") == "tool_call" and latest_bm.get("total_tool_dur"):
+                    tools_summary = ", ".join(t.get("name", "tool") for t in latest_bm.get("tools", [])) or "tool"
+                    tb.add_row(
+                        f"  ↳ Tool ({tools_summary[:22]})",
+                        f"{latest_bm['total_tool_dur']:.2f} s",
+                        "~0.50 s",
+                        _format_diff(latest_bm['total_tool_dur'], 0.50),
+                    )
                 tb.add_row(
                     "5. Total E2E Latency",
                     f"{latest_bm['e2e_dur']:.2f} s",
@@ -476,7 +653,7 @@ class ConversationUI(STTListener, LLMListener, AudioPlaybackListener):
 
                 bm_panel = Panel(
                     tb,
-                    title=f"⏱️ Turn Latency Timeline (Last Turn E2E: {latest_bm['e2e_dur']:.2f}s)",
+                    title=f"⏱️ Turn Latency Timeline (Last Turn E2E: {latest_bm['e2e_dur']:.2f}s | Type: {latest_bm.get('turn_type', 'conv')})",
                     border_style="magenta",
                 )
             else:

@@ -91,7 +91,8 @@ Microphone access requires a secure context in browsers: HTTPS in production, or
 4. The API gathers its own ICE candidates before returning the answer.
 5. The API streams synthesized assistant audio back over WebRTC.
 6. The UI polls transcript and conversation-history endpoints for visible conversation state.
-7. Click **End live** to close the peer connection and microphone tracks.
+7. Speak at any time to barge in: server VAD detects incoming speech, immediately interrupting playback, aborting LLM streaming, and resetting the turn.
+8. Click **End live** to close the peer connection and microphone tracks.
 
 The live path intentionally relies on the server's existing VAD/STT/LLM/TTS pipeline rather than duplicating that pipeline in the browser.
 
@@ -124,6 +125,9 @@ The UI layer is separated from transport and voice orchestration. The API client
 
 - The browser never needs direct access to Ollama, STT, or TTS providers.
 - API errors are surfaced as conversation/system messages instead of being silently swallowed in user-initiated turns.
+- WebRTC audio leverages browser-native acoustic echo cancellation (`echoCancellation: true`) paired with the server-side VAD and `BargeInController` for seamless two-way conversational turn-taking.
+- The client can explicitly interrupt the assistant via `POST /conversation/barge-in`.
 - Live-session polling failures are tolerated because the media connection is independent of the UI polling loop.
 - Microphone tracks and WebRTC peers are explicitly stopped on disconnect and component unmount.
 - The API URL is stored locally in the browser and can be changed without rebuilding the app.
+- Personalization (`USER_NAME`, `USER_LOCATION`, `USER_TIMEZONE`, `ASSISTANT_NAME`) and server-side Model Context Protocol (MCP) tool execution are automatically inherited by all webapp turns through the centralized backend conversation pipeline.

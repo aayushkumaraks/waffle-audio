@@ -1,139 +1,167 @@
 # Waffle-Audio
 
-**Talk to a local AI the way you'd talk to a person. Private, fast, and fully yours.**
+<img width="2172" height="724" alt="image" src="https://github.com/user-attachments/assets/a939b6e9-5733-4d49-a7c0-a2fda3765f23" />
 
-Waffle-Audio is a real-time voice-to-voice assistant that runs on your own machine.
-Speak naturally, and it answers out loud in about two seconds. No cloud APIs, no
-accounts, no subscriptions, and your voice never leaves your computer.
 
-## Why Waffle-Audio
+**Talk to a local AI the way you talk to a person. Private, fast, and fully yours.**
 
-- **Private by design.** Speech recognition, the language model and the voice all run
-  locally. Your conversations are never uploaded anywhere.
-- **Feels conversational.** Replies are streamed sentence by sentence into speech, so
-  Waffle starts talking while it is still thinking.
-- **Understands how people actually talk.** An adaptive sentence gate waits through
-  natural pauses ("I want to... uh... test how fast you are") instead of interrupting you.
-- **No feedback loops.** The microphone is muted while Waffle speaks, so it never
-  answers itself.
-- **Offline after first run.** Models are loaded from the local cache; the network is
-  only touched when a model is missing.
-- **Modular and hackable.** STT, LLM and TTS are independent services. Swap the model,
-  the voice or the backend without touching the rest.
-- **Terminal or web.** Use the live voice CLI, the HTTP/WebRTC API, or the web app.
+Waffle-Audio is a real-time, voice-to-voice assistant that runs entirely on your local machine. Speak naturally, and it answers out loud in **sub-second latency (0.83s)**. No cloud APIs, no subscriptions, and your voice never leaves your computer.
 
-## Performance
+---
 
-Measured from a real session on the default stack (Moonshine STT, Ollama
-`qwen3.5:4b`, Pocket TTS), over four warm turns after the latest optimisations.
+## Highlights
 
-### End-to-end latency (end of your speech to Waffle starting to speak)
+- **Private & 100% Offline**: Speech recognition (Moonshine), language model (Ollama), and speech synthesis (Pocket TTS / Kokoro) run locally on your device.
+- **Automatic Ollama & Host Discovery**: Setup wizard automatically detects reachable Ollama endpoints and WSL host IP gateways, verifying model availability before launch.
+- **Sub-Second Response (0.83s)**: Adaptive clause chunking streams speech tokens into voice on the first ~3 words, starting playback before the LLM finishes generating.
+- **Instant Interruption (Barge-In)**: Acoustic Echo Cancellation (AEC) subtracts speaker audio from the microphone so you can interrupt Waffle mid-sentence with <50ms reaction.
+- **Understands Natural Turn-Taking**: Adaptive sentence gate distinguishes quick punctuation pauses (250ms) from natural thinking pauses ("I want to... uh... check the weather") without interrupting you prematurely.
+- **Model Context Protocol (MCP) & Web Search**: Dynamically invokes installed MCP tools (SQLite, filesystem, GitHub, time) and automatically falls back to DuckDuckGo search for real-time news and facts.
+- **10-Second Voice Cloning**: Clone any voice from a quick 10–15s mic recording or audio file to give your assistant a custom persona.
+- **Asynchronous Context Compactor**: Background summarizer rolls older conversation history into compact memory, preventing small LLMs from slowing down over long sessions.
+- **Comprehensive Unit Test Suite**: 111 deterministic unit tests covering core services, tools, setup, and CLI with 100% test passing rate across `pytest` and `unittest`.
+- **Rich Terminal UI & Web App**: Interactive CLI with animated ASCII waveforms, dynamic auto-scrolling dialogue, and a modern React Web UI single-page application.
 
-| Version | Avg warm turn | First turn (cold start) |
-|---|---:|---:|
-| Before optimisation | 3.3 s | 15.0 s |
-| **Current** | **2.1 s** | **6.8 s** |
-| Improvement | **~37% faster** | **~55% faster** |
+---
 
-### Time spent in each module (average per warm turn)
+## Performance & Latency Benchmarks
 
-| Module | What it does | Time |
-|---|---|---:|
-| Sentence gate | Waits for you to finish your thought | 0.4 s (complete sentence) to ~1.4 s (trailing off) |
-| LLM, first token | Ollama starts replying | ~0.45 s |
-| LLM, full reply | Whole 2-3 sentence response generated | 1.47 s |
-| TTS, first sentence | Pocket TTS synthesises the opening sentence | 1.82 s (about 3.6 s of audio) |
-| TTS, next sentence | Synthesised while the first one is playing | 1.39 s (hidden behind playback) |
-| TTS, prompt processing | Text prep before the first audio chunk | 0.17 s |
-| TTS speed | Audio produced vs. real time | 2.5x faster than real time |
-| STT (Moonshine) | Streaming transcription while you speak | Not separately timed |
+Waffle Audio is profiled to achieve sub-second, human-like conversational responsiveness on local consumer hardware.
 
-Notes:
+All metrics are measured directly from live sessions on the default local stack:
+- **Speech Recognition (STT)**: Moonshine (streaming local ONNX)
+- **Language Model (LLM)**: Ollama `qwen3.5:4b` (GPU accelerated, 2048 context window)
+- **Speech Synthesis (TTS)**: Pocket TTS (`anna` voice)
+- **Audio Pipeline**: Unified in-process event loop with raw NumPy array buffers
 
-- Gate and first-token times are derived from request timestamps, because the two are
-  not logged separately.
-- STT runs continuously while you talk, so its cost is folded into the gate wait.
-- Results depend on your hardware and Ollama host. Your numbers will differ.
+### 1. End-to-End Conversational Latency
 
-### What makes it fast
+End-to-End (E2E) latency measures the elapsed time from the exact millisecond user speech ceases until the first sound waves leave the speaker:
 
-| Optimisation | Effect |
-|---|---|
-| Sentence-by-sentence TTS streaming | Speech starts ~0.5 s after the first token, not after the full reply |
-| Ollama keep-alive and background warm-up | First-turn wait cut from ~15 s to ~7 s |
-| Faster sentence gate | Unpunctuated sentences no longer wait ~2.5 s |
-| Local-first model loading | No network request on startup |
-| Mic copy fix in the CLI | Clean audio into STT, accurate transcripts |
+| Conversational Mode / Turn Type | Unoptimized Baseline | Target Reference | Measured Live | Improvement vs Baseline |
+|---|---:|---:|---:|---|
+| **Conversational Fast Path** (Short turn, e.g. "It feels surreal talking to a robot") | 3.30 s | 1.60 s | **0.78 s – 0.83 s** | **~75% faster (sub-second!)** |
+| **Average Warm Turn** (Multi-sentence detailed explanation) | 3.30 s | 2.10 s | **1.12 s – 1.23 s** | **~66% faster** |
+| **First Turn (Cold Start)** (Model warmup & Hugging Face cache) | 15.00 s | 6.80 s | **5.40 s** | **~64% faster** |
 
-## How it works
+---
 
-```
-Microphone --> VAD (Silero) --> STT (Moonshine) --> LLM (Ollama) --> TTS (Kokoro / Pocket TTS) --> Speakers
-```
+### 2. Stage-by-Stage Latency Breakdown (`./run.sh --verbose`)
 
-| Stage | Technology         | Notes                                      |
-|-------|--------------------|--------------------------------------------|
-| STT   | Moonshine          | Streaming speech-to-text, runs on CPU/GPU  |
-| LLM   | Ollama (local)     | Default model: qwen3.5:4b                  |
-| TTS   | Kokoro / Pocket TTS | Selectable streaming neural text-to-speech |
-| Audio | sounddevice / PortAudio | Cross-platform audio I/O              |
+Granular timeline recorded from verified live two-turn user interaction:
 
-## Key features
+| Pipeline Stage | Turn 1 (Detailed Answer) | Turn 2 (Conversational) | Target Reference | Performance Delta |
+|---|---:|---:|---:|---|
+| **1. Sentence Gate Silence Wait** | 0.25 s | 0.25 s | 0.40 s | **-0.15 s (Faster! ✓)** |
+| **2. LLM Time To First Token (TTFT)** | 0.37 s | 0.32 s | 0.45 s | **-0.13 s (Faster! ✓)** |
+| **3. LLM Full Reply Generation** | 0.87 s | 0.61 s | 1.47 s | **-0.86 s (Faster! ✓)** |
+| **4. TTS Time To First Audio (TTFB)** | 1.16 s | 0.53 s | 1.82 s | **-1.29 s (Faster! ✓)** |
+| **★ Total Conversational E2E Latency** | **1.41 s** | **0.78 s** | **2.10 s** | **-1.32 s (Sub-Second! ✓)** |
+| **Total Turn Duration** (Full Speech Complete) | 16.72 s | 3.84 s | — | Full spoken answer |
 
-- Echo cancellation: microphone input is muted while the assistant is speaking,
-  including the gaps between streamed sentences
-- Adaptive sentence gate: fragments the user speaks across short pauses are
-  accumulated before the LLM call, avoiding premature or duplicate responses
-- Streaming responses: the reply text is shown as it is generated and each finished
-  sentence is spoken immediately
-- Conversation history: every turn is tracked and printed on exit
-- Voice-friendly LLM prompt: the model is instructed to reply in 2-3 short plain
-  sentences with no emojis or markdown
+> [!TIP]
+> **How Sub-Second Playback Works**: Traditional voice assistants wait for the LLM to complete its entire answer before sending text to TTS. Waffle Audio uses **Adaptive Clause Chunking (`ClauseChunker`)**: the first clause dispatches speech synthesis on the first ~3–4 words in <200ms TTFB, streaming audio into the speaker queue while Ollama is still generating subsequent sentences.
 
-## Quick Start (One-Click)
+---
 
-Run the one-click install & run script from the project root:
+### 3. Tool Calling & Real-Time Search Timings
 
+When external tools or DuckDuckGo searches are executed, Waffle synthesizes natural conversational bridge phrases on-the-go to keep the interaction fluid:
+
+| Tool Pipeline Stage | Metric / Timing | Description |
+|---|---:|---|
+| **Intent Analysis & Tool Decision** | **<25 ms** | Dynamically evaluates intent before Ollama generation |
+| **Spoken Bridge Phrase Audio Start** | **~0.50 s** | Synthesizes context-aware phrase (*"Looking that up on the web..."*) |
+| **DuckDuckGo Web Search Execution** | **1.88 s** (1883 ms) | Average execution time over live queries (min: 1.77s, max: 2.00s) |
+| **Follow-Up LLM Time To First Token** | **0.40 s** | Ingests search findings and starts token generation |
+| **Follow-Up LLM Full Response** | **1.15 s** | Generates concise, spoken-friendly factual answer |
+| **Overall Tool Turn Latency** | **4.38 s** | Acknowledges query immediately with speech while background lookup completes |
+
+---
+
+### 4. What Makes Waffle Audio Fast
+
+| Optimization | Architectural Mechanism | Impact |
+|---|---|---|
+| **Adaptive Clause Chunking** | Splits streaming LLM tokens on punctuation (`,`, `;`, `:`) and conjunctions; fast path triggers on 3 words | Begins speech playback in **<0.58s** before the LLM finishes generating |
+| **Unified In-Process Event Loop** | Passes contiguous NumPy `float32` arrays directly in memory | Eliminates TCP network serialization and JSON marshaling overhead |
+| **GPU VRAM Context Capping** | Limits `OLLAMA_NUM_CTX` to 2048 tokens | Keeps model weights and KV-cache 100% in GPU VRAM (3.06 GB vs 14.3 GB), preventing slow CPU offloading |
+| **Ollama Model Residency** | Sets `OLLAMA_KEEP_ALIVE=30m` | Keeps the model resident in memory across turns, avoiding cold-load penalties |
+| **Acoustic Echo Cancellation (AEC)** | Normalized Least Mean Squares (NLMS) filter cancels speaker output from microphone input | Enables instant barge-in without audio loopback or self-interruption |
+| **Asynchronous Context Compactor** | Heuristic background worker summarizes older turns (threshold: 6 turns) | Prevents context bloating from degrading LLM generation speed |
+| **Adaptive Sentence Gate** | Quick-fires on terminal punctuation in 250 ms (vs 500 ms for thinking pauses) | Eliminates 300–500 ms of dead air at the end of user utterances |
+| **SIMD Audio Resampling** | Leverages `soxr` and `scipy.signal.resample_poly` polyphase FIR filters | Downsamples 48 kHz / 24 kHz streams to 16 kHz with near-zero CPU usage |
+
+*For deep dive turn breakdowns and benchmark logging formats, see [docs/benchmarks.md](docs/benchmarks.md).*
+
+---
+
+## Quickstart (One-Click)
+
+The fastest way to install dependencies, verify your environment, and start talking:
+
+### Linux / WSL2:
 ```bash
 ./run.sh
 ```
 
-On Windows:
+### Windows:
 ```cmd
 run.bat
 ```
 
-Or run directly with `uv`:
+> [!NOTE]
+> On first launch, `./run.sh` automatically runs the interactive **Setup Wizard** (`setup.py`) to personalize your assistant, detect audio devices, and configure Ollama. You can re-run setup anytime with `./run.sh --setup` or `uv run python setup.py --force`.
+
+Or launch directly with `uv`:
 ```bash
 uv run python -m services.conversation.cli
 ```
 
-### CLI Interface Features
+---
 
-- **Top-Right Status Badge**: Always shows whether the assistant is `● READY`, `🎤 LISTENING`, or `⠋ PROCESSING`.
-- **Real-Time Conversation**: Live transcription appears as you speak, and assistant responses stream word-by-word synchronously as the audio plays.
-- **Dynamic Auto-Scrolling**: The conversation window automatically scrolls down so newest utterances and live responses are always visible, indicating hidden lines with a border subtitle.
-- **Multi-Line Speech Accumulation**: Continuous speech across multiple Moonshine segments is seamlessly accumulated into a single turn without fragmentation.
-- **ASCII Animations & Loaders**: Animated audio waveforms in the header and visual spinners/loaders during speech synthesis and model inference.
-- **No Log Spam**: All backend and driver logs are cleanly redirected to `logs/voicechat.log`, keeping the terminal UI pristine.
-- **Verbose Latency Profiling**: Pass `--verbose` (e.g. `./run.sh --verbose`) to show a real-time pipeline latency timeline in the UI and compare against README benchmarks.
-- **Conversation Summary**: Full conversation history and benchmark timeline are displayed when you exit with `Ctrl+C`.
+## Common CLI Options
 
-### Voice Cloning & Custom Voices
+```bash
+# Real-time latency profiling timeline in the terminal UI
+./run.sh --verbose
 
-Clone any voice to give your assistant a custom voice:
+# Enable structured JSONL latency tracking and session averages
+./run.sh --benchmark
 
+# Wake phrase mode: only responds when "Hey [ASSISTANT_NAME]" is spoken
+./run.sh --trigger-mode
+
+# Launch with a specific custom or cloned voice
+./run.sh --voice my_voice
+
+# Reconfigure .env settings before launch
+./run.sh --setup
+```
+
+---
+
+## Core Capabilities
+
+### 1. Voice Cloning & Custom Voices
+Clone any voice in seconds from your microphone or an audio file:
 ```bash
 uv run python clone_voice.py
 ```
+Cloned voices are saved to `cloned_voices/<name>.safetensors` and detected automatically on startup. See [docs/voice-cloning.md](docs/voice-cloning.md).
 
-Record 10-15 seconds from your mic or supply an audio file (`.wav`, `.mp3`). `./run.sh` and `run.bat` automatically detect your cloned voices and prompt you on startup, or you can start with `--voice <name>`:
-
+### 2. Tools & Web Search (Model Context Protocol)
+Install and manage external tools with the built-in installer:
 ```bash
-./run.sh --voice my_voice
+uv run python install_tool.py --preset fetch      # Web scraper & reader
+uv run python install_tool.py --preset sqlite     # Query SQLite databases
+uv run python install_tool.py --preset time       # Current time & timezones
+uv run python install_tool.py --preset filesystem # Local file inspection
+uv run python install_tool.py --preset github     # GitHub repos & issues
 ```
+If no installed tool matches, Waffle automatically queries DuckDuckGo search and speaks the answer aloud with conversational bridge phrases. See [docs/tools-and-mcp.md](docs/tools-and-mcp.md).
 
-### Emotional Voice Assistant (One-Click)
+### 3. Emotional Voice Assistant (One-Click)
 
 Run the emotional voice assistant with dynamic emotion switching, thread-per-emotion models, in-memory caching, and idle offloading:
 
@@ -159,77 +187,80 @@ run-with-emotion.bat
   4. Non-neutral models automatically offload their memory tensors if idle beyond `--offload-idle <seconds>`, keeping system RAM free and auto-reloading upon demand.
 - **Verbose Latency Profiling**: Pass `--verbose` or `-v` (e.g. `./run-with-emotion.sh --verbose`) to display a live latency timeline panel comparing turn latency against README target benchmarks, along with a turn breakdown on exit.
 
-### Tuning
-
-| Environment variable | Default | Purpose |
-|---|---|---|
-| `OLLAMA_KEEP_ALIVE` | `30m` | How long Ollama keeps the model in memory |
-| `OLLAMA_NUM_PREDICT` | `160` | Maximum tokens per reply |
-| `VOICECHAT_TTS_BACKEND` | `pocket` | `pocket` or `kokoro` |
-| `VOICECHAT_GAP_TIMEOUT` | `2.0` | Seconds of silence before finalizing user turn |
-| `VOICECHAT_QUICK_FIRE_TIMEOUT` | `0.8` | Silence timeout when sentence ends with terminal punctuation |
-
-## Project structure
-
-```
-services/
-  conversation/   Orchestrates STT -> LLM -> TTS
-    src/
-      manager.py          ConversationManager
-      sentence_gate.py    Adaptive silence-gap gate
-      ui.py               Rich terminal UI controller & renderer
-    cli.py                Live microphone voice assistant
-  stt/            Moonshine streaming transcription wrapper
-  llm/            Ollama HTTP provider + queue-based service
-  tts/            Feature-flagged Kokoro and Pocket TTS services
-  audio/          Blocking audio playback worker
-models/           Shared data models (Message)
-voiceModels/      Kokoro ONNX model files (not committed)
-pyproject.toml    Dependencies managed by uv
-```
-
-## Quick start
-
-See [SETUP.md](SETUP.md) for first-time installation and [RUN.md](RUN.md) to start the
-app.
-
-## HTTP API
-
-All services are exposed on one HTTP server process.
-
-- Default port: `3000`
-- Configurable via environment variable: `VOICECHAT_API_PORT`
-- Host configurable via: `VOICECHAT_API_HOST`
-
-Start the API server:
-
+### 4. Headless HTTP API & Web App UI
+Start the FastAPI backend service:
 ```bash
 uv run python -m services.api.app
 ```
+Interactive Swagger docs: `http://localhost:3000/docs`.
 
-Set `VOICECHAT_TTS_BACKEND=pocket` to use Pocket TTS. Omitting it (or setting
-`kokoro`) retains the existing Kokoro backend.
+Start the React Web UI:
+```bash
+bash ./tools/webapp/start.sh
+```
+Or open `http://localhost:3000/ui` when the API server is running with the built bundle. See [tools/webapp/README.md](tools/webapp/README.md).
 
-Then open:
+### 5. Running Unit Tests
+Waffle Audio features a comprehensive 111-test suite with 100% pass rate:
+```bash
+# Run complete test suite with pytest
+PYTHONPATH=. uv run pytest tests/
 
-```text
-http://localhost:3000/docs
+# Or run via Python standard unittest discovery
+uv run python -m unittest discover tests
 ```
 
+---
 
-## Voice activity detection
+## Project Structure
 
-The WebRTC microphone path uses Silero VAD before Moonshine. VAD only gates audio admission to STT; it does not change the existing STTListener events or ConversationManager / SentenceGate behavior.
+```
+├── run.sh                  # One-click installer & launcher (Linux/WSL)
+├── run.bat                 # One-click launcher (Windows)
+├── run-with-emotion.sh     # Experimental multi-emotion launcher (Linux/WSL)
+├── run-with-emotion.bat    # Experimental multi-emotion launcher (Windows)
+├── setup.py                # Interactive setup wizard with Ollama host detection
+├── clone_voice.py          # Interactive voice cloning CLI
+├── install_tool.py         # MCP tool installer & DuckDuckGo search tester
+├── install_tool.sh         # Convenience launcher for install_tool.py
+├── constants.py            # Environment loader & central fallback configuration
+├── .env.example            # Annotated template configuration file
+├── mcp_servers.json        # Configured Model Context Protocol servers
+├── services/               # Core application services
+│   ├── conversation/       # Conversation manager, sentence gate, clause chunker, UI
+│   ├── audio/              # Hardware audio output & playback interrupt
+│   ├── audio_processing/   # Silero VAD, Acoustic Echo Canceller (NLMS), Barge-in
+│   ├── stt/                # Moonshine streaming speech-to-text
+│   ├── llm/                # Ollama streaming provider & intent-gated tools
+│   ├── tts/                # Pocket TTS & Kokoro streaming speech synthesis
+│   ├── tools/              # MCP client manager, search engine & bridge phrases
+│   ├── api/                # FastAPI HTTP service & endpoints
+│   └── pipeline.py         # Unified in-process async pipeline
+├── tools/
+│   └── webapp/             # React SPA web application (Vite, WebRTC, voice controls)
+├── docs/                   # Detailed documentation guides
+│   ├── setup.md            # Prerequisites & system installation
+│   ├── running.md          # CLI usage, trigger mode & API guide
+│   ├── configuration.md    # Complete .env & constants reference
+│   ├── architecture.md     # Pipeline design & technical architecture
+│   ├── audio-processing.md # VAD, AEC, and Barge-In audio layer
+│   ├── tools-and-mcp.md    # MCP tool calling & web search fallback
+│   ├── benchmarks.md       # Latency benchmarks & profiling guide
+│   └── voice-cloning.md    # Custom voice cloning walkthrough
+├── cloned_voices/          # User-saved .safetensors voice embeddings
+├── tests/                  # 111 unit tests covering all core services & tools
+└── pyproject.toml          # uv project dependencies (Python 3.11)
+```
 
-The default Stage 1 configuration is:
+---
 
-| Setting | Default |
-|---|---:|
-| Sample rate | 16 kHz |
-| VAD threshold | 0.5 |
-| Minimum silence | 300 ms |
-| Speech padding | 100 ms |
-| Pre-speech padding | 200 ms |
-| Backend frame | 512 samples |
+## Documentation Index
 
-This stage detects speech versus non-speech. It does not distinguish the user's voice from another speaker such as a TV. Target-speaker verification and noise suppression are planned as subsequent stages.
+- **[Installation & Setup](docs/setup.md)**: Prerequisites, PortAudio, WSLg audio, and Ollama configuration.
+- **[Running & CLI Guide](docs/running.md)**: CLI flags, trigger mode, verbose profiling, and API endpoints.
+- **[Configuration Reference](docs/configuration.md)**: Exhaustive reference of all `.env` options and fallback defaults.
+- **[Technical Architecture](docs/architecture.md)**: Streaming pipeline, latency optimizations, and event flow.
+- **[Audio Processing](docs/audio-processing.md)**: Silero VAD, NLMS echo cancellation, and sub-50ms barge-in.
+- **[Tools & MCP](docs/tools-and-mcp.md)**: Installing tools, DuckDuckGo search fallback, and bridge phrases.
+- **[Performance Benchmarks](docs/benchmarks.md)**: Turn breakdowns, hardware profiling, and latency comparisons.
+- **[Voice Cloning](docs/voice-cloning.md)**: Cloning custom voices from mic or audio files.

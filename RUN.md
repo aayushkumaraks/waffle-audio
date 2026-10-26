@@ -1,6 +1,10 @@
-# Running the app
+# Running Waffle Audio
 
-## One-Click Start (CLI App)
+Quick reference for running Waffle Audio. For full details, see the [Running & CLI Guide](docs/running.md).
+
+---
+
+## 1. One-Click Start (CLI App)
 
 The fastest way to install dependencies, verify models, and start the voice assistant:
 
@@ -13,6 +17,9 @@ On Windows:
 run.bat
 ```
 
+> [!TIP]
+> On your first run, `./run.sh` automatically launches the interactive **Setup Wizard** (`setup.py`) to personalize your assistant and detect your microphone and Ollama setup. You can re-run the wizard anytime with `./run.sh --setup` or `uv run python setup.py --force`.
+
 Or start the CLI app directly with `uv`:
 
 ```bash
@@ -21,7 +28,19 @@ uv run python -m services.conversation.cli
 
 ---
 
-## Emotional Voice Assistant (Multi-Emotion Voice Models)
+## 2. Common CLI Flags
+
+| Command / Flag | Purpose |
+|---|---|
+| `./run.sh -v` / `--verbose` | Show real-time turn latency timeline and compare with benchmarks |
+| `./run.sh --benchmark` | Enable latency metrics, tool execution logging, and session averages |
+| `./run.sh --trigger-mode` | Only respond when wake phrase `"Hey <ASSISTANT_NAME>"` is spoken |
+| `./run.sh --voice <name>` | Start with a specific voice or cloned voice from `cloned_voices/` |
+| `./run.sh --setup` | Re-run the interactive setup wizard before starting |
+
+---
+
+## 3. Emotional Voice Assistant (Multi-Emotion Voice Models)
 
 Run the emotion-aware voice assistant with dynamic emotion detection, dedicated per-emotion worker threads, in-memory caching, and automatic idle offloading:
 
@@ -89,184 +108,73 @@ User Speech --> STT (Moonshine) --> LLM with [emotion] prompt --> EmotionParser
 - **Real-Time LLM Emotion Tagging & Parsing**: The LLM specifies its emotional tone via tags like `[happy]`, `[sad]`, `[angry]`, or `[neutral]`, which are dynamically parsed to route speech chunks to the matching emotion voice worker.
 - **Verbose Latency Profiling**: Pass `--verbose` or `-v` to show live pipeline latency metrics and compare against the README warm turn benchmarks.
 
-### CLI Interface Features
-- **Top-Right Status Badge**: Always shows `● READY`, `🎤 LISTENING`, or `⠋ PROCESSING`.
-- **Real-Time Conversation**: Live speech transcription and streaming voice responses synchronized with audio playback.
-- **Dynamic Auto-Scrolling**: Keeps dialogue panel anchored at the bottom as turns arrive, with an indicator for scrolled lines.
-- **Multi-Line Speech Accumulation**: Continuous user speech spanning multiple segments is joined into a single coherent prompt.
-- **ASCII Animations**: Dynamic header waveforms and processing spinners.
-- **Zero Log Clutter**: All engine chatter is written to `logs/voicechat.log`.
-- **Verbose Latency Profiling**: Pass `--verbose` (e.g. `./run.sh --verbose`) to display real-time latency timelines and compare with README benchmarks.
-
 ---
 
-## Voice Cloning & Custom Voices (Pocket TTS)
+## 4. Voice Cloning
 
-Waffle Audio supports instant voice cloning with Pocket TTS. Cloned voices are saved to `cloned_voices/<voice_name>.safetensors`.
-
-### 1. Clone a voice
-
-Run the interactive cloning wizard:
+Clone any custom voice in 10–15 seconds:
 
 ```bash
 uv run python clone_voice.py
 ```
 
-You can record 10-15 seconds directly through your microphone or provide an existing audio file (`.wav`, `.mp3`, etc.):
-
-```bash
-# Clone from an audio file:
-uv run python clone_voice.py --name alex --audio sample.wav
-
-# Clone from microphone with custom duration:
-uv run python clone_voice.py --name alex --record --duration 12
-
-# List all cloned voices:
-uv run python clone_voice.py --list
-```
-
-> [!NOTE]
-> Pocket TTS voice cloning uses gated weights from [Hugging Face (kyutai/pocket-tts)](https://huggingface.co/kyutai/pocket-tts). Simply accept the terms on Hugging Face and provide your token when prompted (or via `HF_TOKEN`).
-
-### 2. Run with your cloned voice
-
-When you launch with `./run.sh` (or `run.bat`), it detects your cloned voices and asks if you would like to use one:
-
-```text
-Cloned Voices Detected:
-  [0] Default voice
-  [1] alex (cloned)
-
-Would you like to use a cloned voice for your assistant? [0-1, default: 0]: 1
-✓ Selected voice: alex
-```
-
-Or pass `--voice <name>` directly:
-
-```bash
-./run.sh --voice alex
-# or
-uv run python -m services.conversation.cli --voice alex
-```
-
-## Start Ollama (Manual)
-
-The LLM service requires Ollama to be running before the app starts.
-
-```
-ollama serve
-```
-
-If Ollama is already running as a background service (e.g., started automatically on
-login), you can skip this step.
+See [docs/voice-cloning.md](docs/voice-cloning.md) for full instructions.
 
 ---
 
-## Start the API server
+## 5. MCP Tools & Search
 
-From the project root:
+Manage installed Model Context Protocol (MCP) tools and web search:
 
+```bash
+uv run python install_tool.py
 ```
+
+See [docs/tools-and-mcp.md](docs/tools-and-mcp.md) for presets and options.
+
+---
+
+## 6. HTTP API Server & Web App UI
+
+Start the headless FastAPI server process:
+
+```bash
 uv run python -m services.api.app
 ```
 
-You should see output similar to:
+Interactive Swagger documentation is available at: `http://localhost:3000/docs`
 
-```
-INFO:     Started server process [12345]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:3000 (Press CTRL+C to quit)
-```
-
-Swagger docs are available at:
-
-```
-http://localhost:3000/docs
-```
-
-The **browser webapp** is served from the same port — no separate server needed:
-
-```
-http://localhost:3000/ui
-```
-
-All services and the webapp are on this same server and port.
-
----
-
-## Stop the app
-
-Press `Ctrl+C`. The server shuts down and all services are stopped cleanly.
-
----
-
-## Main endpoints
-
-| Area         | Method + Path               | Purpose |
-|--------------|-----------------------------|---------|
-| **Webapp**   | `GET /ui`                   | Browser voice chat UI |
-| Health       | `GET /health`               | Service health and API port |
-| LLM          | `POST /llm/generate`        | Generate one response from chat messages |
-| TTS          | `POST /tts/speak`           | Queue text for speech (server-side playback) |
-| TTS          | `POST /tts/synthesize`      | Synthesize text and return WAV for browser playback |
-| STT          | `POST /stt/push`            | Push audio samples for transcription |
-| STT          | `GET /stt/transcripts`      | Read captured transcript events |
-| STT          | `DELETE /stt/transcripts`   | Clear transcript events |
-| Conversation | `POST /conversation/respond`| Submit finalized user text into conversation flow |
-| Conversation | `GET /conversation/history` | Read conversation history |
-| Conversation | `DELETE /conversation/history` | Clear conversation history |
-| Audio        | `GET /audio/status`         | Playback state |
-
----
-
-## Configuration
-
-Use environment variables to configure the API bind address and port.
+To start the React Web UI:
 
 ```bash
-VOICECHAT_API_HOST=0.0.0.0 VOICECHAT_API_PORT=3000 uv run python -m services.api.app
+bash ./tools/webapp/start.sh
 ```
 
-For browser clients, CORS is enabled by default for all origins (`*`).
-To restrict origins, pass a comma-separated allowlist:
-
-```bash
-VOICECHAT_CORS_ALLOW_ORIGINS=http://localhost:8080,http://127.0.0.1:5500 uv run python -m services.api.app
-```
-
-| Setting        | Location                                     | Default              |
-|----------------|----------------------------------------------|----------------------|
-| API host       | `constants.py` (`VOICECHAT_API_HOST`)        | 0.0.0.0              |
-| API port       | `constants.py` (`VOICECHAT_API_PORT`)        | 3000                 |
-| CORS origins   | `constants.py` (`VOICECHAT_CORS_ALLOW_ORIGINS`) | *                 |
-| Ollama URL     | `services/llm/src/llm_provider.py`           | http://172.19.96.1:11434 |
-| Ollama model   | `services/llm/src/llm_provider.py`           | qwen3.5:4b           |
-| TTS voice      | `services/tts/src/tts_service.py`            | af_sarah             |
-| TTS speed      | `services/tts/src/tts_service.py`            | 1.0                  |
-| STT language   | `services/stt/src/stt_service.py`            | en                   |
-| Silence gate   | `constants.py` (`VOICECHAT_GAP_TIMEOUT`, `VOICECHAT_QUICK_FIRE_TIMEOUT`) | 2.0 s gap, 0.8 s quick-fire |
+Or open `http://localhost:3000/ui` in your browser when the API server is active with the built webapp bundle.
 
 ---
 
-## Troubleshooting
+## 7. Running Unit Tests
 
-**"Unable to connect to Ollama"**
-Ollama is not running or is on a different address. Start it with `ollama serve` and
-check `LLMProviderConfig.base_url` in `services/llm/src/llm_provider.py`.
+Run the complete 111-test suite across all services and tools:
 
-**"Address already in use"**
-Another process is already using the configured API port. Change `VOICECHAT_API_PORT`
-to an open port.
+```bash
+# Run via pytest (recommended)
+PYTHONPATH=. uv run pytest tests/
 
-**No audio input / output**
-Run `uv run python -c "import sounddevice; print(sounddevice.query_devices())"` to list
-devices. On Linux/WSL2 ensure PortAudio is installed (`sudo apt install libportaudio2`).
+# Or run via Python unittest runner
+uv run python -m unittest discover tests
+```
 
-**Moonshine model download is slow**
-The Moonshine model is downloaded automatically on first start and cached locally.
-Subsequent starts are fast.
+---
 
-**The assistant does not respond**
-Check the terminal for logged warnings. A common cause is the STT transcribing silence
-or noise; the sentence gate will discard empty transcripts automatically.
+## 8. Full Documentation
+
+- **[Installation & Setup](docs/setup.md)**
+- **[CLI & Running Guide](docs/running.md)**
+- **[Configuration Reference](docs/configuration.md)**
+- **[System Architecture](docs/architecture.md)**
+- **[Audio Processing](docs/audio-processing.md)**
+- **[Tools & MCP](docs/tools-and-mcp.md)**
+- **[Latency Benchmarks](docs/benchmarks.md)**
+- **[Voice Cloning](docs/voice-cloning.md)**
