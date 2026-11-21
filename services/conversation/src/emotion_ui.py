@@ -8,12 +8,17 @@ from typing import Any, Literal
 from rich.align import Align
 from rich.console import Console
 from rich.layout import Layout
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
 from services.audio.src import AudioPlaybackListener
-from services.conversation.src.emotion_parser import extract_turn_emotion, strip_emotion_tags
+from services.conversation.src.emotion_parser import (
+    extract_latest_emotion,
+    extract_turn_emotion,
+    strip_emotion_tags,
+)
 from services.llm.src import LLMListener
 from services.stt.src import STTListener
 
@@ -99,6 +104,8 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
     def sync_audio_playback(self, is_playing: bool) -> None:
         with self._lock:
             self._is_playing_audio = is_playing
+            if not is_playing and not self._is_generating and self._status == "PROCESSING":
+                self._status = "READY"
 
     # ------------------------------------------------------------------
     # STTListener
@@ -174,8 +181,8 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
             self._status = "PROCESSING"
             self._llm_generated_text = text
             self._current_assistant = text
-            detected = extract_turn_emotion(text)
-            if detected:
+            detected = extract_latest_emotion(text)
+            if detected is not None:
                 self._active_emotion = detected
 
     def on_generation_completed(self, text: str) -> None:
@@ -185,15 +192,17 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
             self._t_llm_done = now
             self._llm_generated_text = text.strip() or self._llm_generated_text.strip()
             clean_text = strip_emotion_tags(text)
-            detected = extract_turn_emotion(text)
+            detected = extract_latest_emotion(text) or extract_turn_emotion(text, default=self._active_emotion)
+            self._active_emotion = detected
             if clean_text:
                 self._history.append({
                     "role": "assistant",
                     "text": clean_text,
-                    "emotion": detected or self._active_emotion,
+                    "emotion": detected,
                 })
             self._current_assistant = ""
-            self._status = "READY"
+            if not self._is_playing_audio:
+                self._status = "READY"
 
     # ------------------------------------------------------------------
     # AudioPlaybackListener
@@ -216,6 +225,9 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
             now = time.perf_counter()
             self._is_playing_audio = False
             self._t_playback_end = now
+            if not self._is_generating and self._status == "PROCESSING":
+                self._status = "READY"
+            self._current_assistant = ""
 
             # Record benchmark metrics
             last_user_text = "Unknown"
@@ -345,24 +357,27 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
 
         for msg in history[-6:]:
             if msg["role"] == "user":
-                chat_table.add_row("[bold cyan]You:[/bold cyan]", f"[cyan]{msg['text']}[/cyan]")
+                chat_table.add_row("[bold cyan]You:[/bold cyan]", f"[cyan]{escape(msg['text'])}[/cyan]")
             else:
                 emo = msg.get("emotion", "neutral")
                 e_color = EMOTION_STYLES.get(emo, EMOTION_STYLES["neutral"])["color"]
                 chat_table.add_row(
                     f"[bold green]Waffle [{emo.upper()}]:[/bold green]",
-                    f"[{e_color}]{msg['text']}[/{e_color}]",
+                    f"[{e_color}]{escape(msg['text'])}[/{e_color}]",
                 )
 
         if current_user:
-            chat_table.add_row("[bold cyan]You (speaking):[/bold cyan]", f"[bold white]{current_user}[/bold white]")
+            chat_table.add_row(
+                "[bold cyan]You (speaking):[/bold cyan]",
+                f"[bold white]{escape(current_user)}[/bold white]",
+            )
 
         if current_assistant:
             clean_ast = strip_emotion_tags(current_assistant)
             e_color = EMOTION_STYLES.get(active_emotion, EMOTION_STYLES["neutral"])["color"]
             chat_table.add_row(
                 f"[bold green]Waffle [{active_emotion.upper()}]:[/bold green]",
-                f"[{e_color}]{clean_ast}[/{e_color}]",
+                f"[{e_color}]{escape(clean_ast)}[/{e_color}]",
             )
 
         body_layout["conversation"].update(

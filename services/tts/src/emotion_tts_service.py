@@ -1,15 +1,13 @@
-"""Multi-threaded, in-memory emotion TTS service for PocketTTS with idle offloading."""
+"""Emotion-aware PocketTTS service with FIFO ordering, voice-state caching, and idle offloading."""
 from __future__ import annotations
 
-import gc
 import logging
 import os
 import queue
 import threading
 import time
-from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Callable, TypeVar
 
 import numpy as np
 
@@ -22,12 +20,6 @@ from constants import (
     TTS_QUANTIZE,
     get_emotion_voice_path,
 )
-
-# Pin Hugging Face cache
-os.environ.setdefault("HF_HOME", str(Path(POCKET_TTS_CACHE_DIR).resolve()))
-
-from pocket_tts import TTSModel
-from services.tts.src.hf_cache import load_local_first
 from services.tts.src.tts_types import (
     AudioBuffer,
     ServiceAlreadyStarted,
@@ -37,13 +29,27 @@ from services.tts.src.tts_types import (
     TTSServiceError,
 )
 
+# Pin Hugging Face cache before pocket_tts / huggingface_hub are lazily imported
+os.environ.setdefault("HF_HOME", str(Path(POCKET_TTS_CACHE_DIR).resolve()))
+
+if TYPE_CHECKING:
+    from pocket_tts import TTSModel
+
 logger = logging.getLogger(__name__)
 
 _STOP = object()
+_T = TypeVar("_T")
+
+
+def load_local_first(loader: Callable[[], _T]) -> _T:
+    """Lazy wrapper around hf_cache.load_local_first so huggingface_hub is not imported eagerly."""
+    from services.tts.src.hf_cache import load_local_first as _load_local_first
+
+    return _load_local_first(loader)
 
 
 class EmotionVoiceWorker:
-    """Dedicated worker thread managing an individual emotion voice model in memory."""
+    """Manages an individual emotion voice state in memory with optional standalone worker mode."""
 
     def __init__(
         self,
@@ -76,8 +82,12 @@ class EmotionVoiceWorker:
         with self._state_lock:
             return self._voice_state is not None
 
+    def get_state(self) -> object | None:
+        with self._state_lock:
+            return self._voice_state
+
     def load(self) -> None:
-        """Load the voice state tensor into memory."""
+        """Load the voice state tensor into memory under the engine lock."""
         with self._state_lock:
             if self._voice_state is not None:
                 return
@@ -93,7 +103,8 @@ class EmotionVoiceWorker:
             if engine is None:
                 raise RuntimeError("Cannot load voice state before TTS engine is initialized.")
 
-            state = engine.get_state_for_audio_prompt(str(self.model_path.resolve()))
+            with self._engine_lock:
+                state = engine.get_state_for_audio_prompt(str(self.model_path.resolve()))
             self._voice_state = state
             self.last_used_time = time.time()
             elapsed_ms = (time.perf_counter() - t0) * 1000
@@ -106,18 +117,17 @@ class EmotionVoiceWorker:
             )
 
     def offload(self) -> bool:
-        """Offload the voice state from memory to release RAM."""
+        """Offload the voice state from memory to release RAM without blocking on GC."""
         with self._state_lock:
             if self._voice_state is None:
                 return False
 
             self._voice_state = None
-            gc.collect()
             logger.info("Offloaded [%s_%s] voice model from memory.", self.gender, self.emotion)
             return True
 
     def start(self) -> None:
-        """Start the worker thread."""
+        """Start standalone worker thread (used if EmotionVoiceWorker is run independently)."""
         if self._started:
             return
         self._started = True
@@ -129,21 +139,20 @@ class EmotionVoiceWorker:
         self._thread.start()
 
     def stop(self) -> None:
-        """Stop worker thread and release memory."""
-        if not self._started:
-            return
-        self._started = False
-        try:
-            self._queue.put_nowait(_STOP)
-        except queue.Full:
-            pass
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=3.0)
-        self._thread = None
+        """Stop standalone worker thread and release memory."""
+        if self._started:
+            self._started = False
+            try:
+                self._queue.put_nowait(_STOP)
+            except queue.Full:
+                pass
+            if self._thread and self._thread.is_alive():
+                self._thread.join(timeout=3.0)
+            self._thread = None
         self.offload()
 
     def submit(self, text: str) -> None:
-        """Enqueue speech text for this emotion."""
+        """Enqueue speech text for this emotion (standalone mode)."""
         if not self._started:
             raise ServiceNotStarted(f"Worker for {self.emotion} is not started.")
         try:
@@ -166,7 +175,6 @@ class EmotionVoiceWorker:
                 self.is_synthesizing = True
                 self.last_used_time = time.time()
 
-                # Ensure loaded in memory (lazy auto-reload on demand if was offloaded)
                 if not self.is_loaded:
                     self.load()
 
@@ -174,17 +182,13 @@ class EmotionVoiceWorker:
                 if engine is None:
                     continue
 
-                with self._state_lock:
-                    state = self._voice_state
-
+                state = self.get_state()
                 if state is None:
                     logger.error("Failed to acquire state for emotion %s", emotion)
                     continue
 
-                self._dispatch["started"](emotion)
-
-                # Stream audio chunks under engine lock
                 with self._engine_lock:
+                    self._dispatch["started"](emotion)
                     first = True
                     for chunk in engine.generate_audio_stream(state, text):
                         audio = chunk.detach().cpu().numpy().reshape(-1).astype(np.float32, copy=False)
@@ -201,7 +205,7 @@ class EmotionVoiceWorker:
 
 
 class EmotionTTSService:
-    """Coordinates multi-emotion PocketTTS workers with thread-per-emotion and idle offloading."""
+    """Coordinates multi-emotion PocketTTS synthesis with strict FIFO ordering and idle offloading."""
 
     def __init__(
         self,
@@ -227,10 +231,16 @@ class EmotionTTSService:
         self._started = False
         self._listeners: list[TTSListener] = []
 
+        # Single FIFO synthesis queue preserves sentence ordering across emotion switches
+        self._speech_queue: queue.Queue[tuple[str, str] | object] = queue.Queue(queue_size)
+        self._worker_thread: threading.Thread | None = None
+        self._pending = 0
+        self._pending_lock = threading.Lock()
+        self._epoch = 0
+
         self._watchdog_thread: threading.Thread | None = None
         self._watchdog_stop = threading.Event()
 
-        # Create workers for all available emotions
         dispatch_cbs = {
             "started": self._dispatch_synthesis_started,
             "chunk": self._dispatch_audio_chunk,
@@ -255,6 +265,16 @@ class EmotionTTSService:
     def is_started(self) -> bool:
         return self._started
 
+    @property
+    def is_busy(self) -> bool:
+        """True while any text is queued or currently being synthesized."""
+        with self._pending_lock:
+            return self._pending > 0
+
+    def _change_pending(self, delta: int) -> None:
+        with self._pending_lock:
+            self._pending = max(0, self._pending + delta)
+
     def add_listener(self, listener: TTSListener) -> None:
         if listener not in self._listeners:
             self._listeners.append(listener)
@@ -264,34 +284,38 @@ class EmotionTTSService:
             self._listeners.remove(listener)
 
     def start(self) -> None:
-        """Start the TTS engine and all emotion voice workers."""
+        """Start the TTS engine, preload all emotion voice states, and launch FIFO synthesis worker."""
         if self._started:
             raise ServiceAlreadyStarted("EmotionTTSService is already started.")
 
         logger.info("Initializing PocketTTS engine for EmotionTTSService (gender=%s)...", self.gender)
 
         def _loader() -> TTSModel:
+            from pocket_tts import TTSModel
+
             return TTSModel.load_model(language=self.language, quantize=self.quantize)
 
         self._engine = load_local_first(_loader)
 
-        # Start each worker thread and load their states in parallel threads
-        load_threads: list[threading.Thread] = []
-        for emotion, worker in self._workers.items():
-            worker.start()
-            # Parallel loading thread for fast startup
-            t = threading.Thread(
-                target=worker.load,
-                name=f"loader-{emotion}",
-                daemon=True,
-            )
-            load_threads.append(t)
-            t.start()
-
-        for t in load_threads:
-            t.join(timeout=10.0)
+        try:
+            for worker in self._workers.values():
+                worker.load()
+        except Exception as exc:
+            for worker in self._workers.values():
+                worker.offload()
+            with self._engine_lock:
+                self._engine = None
+            raise TTSServiceError(
+                f"Failed to load emotion voice models for gender '{self.gender}': {exc}"
+            ) from exc
 
         self._started = True
+        self._worker_thread = threading.Thread(
+            target=self._process_speech_queue,
+            name="tts-emotion-worker",
+            daemon=True,
+        )
+        self._worker_thread.start()
 
         # Start background watchdog for idle offloading if enabled
         if self.offload_idle_seconds > 0:
@@ -306,15 +330,29 @@ class EmotionTTSService:
         logger.info("EmotionTTSService started successfully for gender '%s'.", self.gender)
 
     def stop(self) -> None:
-        """Stop all workers and unload engine."""
+        """Stop synthesis worker, watchdog, and unload engine & voice states."""
         if not self._started:
             return
 
         self._started = False
+        self._epoch += 1
         self._watchdog_stop.set()
         if self._watchdog_thread:
             self._watchdog_thread.join(timeout=2.0)
             self._watchdog_thread = None
+
+        try:
+            self._speech_queue.put_nowait(_STOP)
+        except queue.Full:
+            self.interrupt()
+            try:
+                self._speech_queue.put_nowait(_STOP)
+            except queue.Full:
+                pass
+
+        if self._worker_thread and self._worker_thread.is_alive():
+            self._worker_thread.join(timeout=5.0)
+        self._worker_thread = None
 
         for worker in self._workers.values():
             worker.stop()
@@ -322,11 +360,13 @@ class EmotionTTSService:
         with self._engine_lock:
             self._engine = None
 
-        gc.collect()
+        with self._pending_lock:
+            self._pending = 0
+
         logger.info("EmotionTTSService stopped.")
 
     def speak(self, text: str, emotion: str = "neutral") -> None:
-        """Speak text with the requested emotion voice model."""
+        """Speak text with the requested emotion voice model in strict FIFO order."""
         if not self._started:
             raise ServiceNotStarted("EmotionTTSService is not started.")
 
@@ -335,8 +375,78 @@ class EmotionTTSService:
             logger.warning("Unknown emotion '%s', falling back to 'neutral'.", emotion)
             emotion_key = "neutral"
 
-        worker = self._workers[emotion_key]
-        worker.submit(text)
+        self._change_pending(1)
+        try:
+            self._speech_queue.put_nowait((text, emotion_key))
+        except queue.Full as exc:
+            self._change_pending(-1)
+            raise SpeechQueueFull(f"Speech queue is full (emotion={emotion_key}).") from exc
+
+    def interrupt(self) -> None:
+        """Purge pending text and stop any in-flight synthesis for instant barge-in."""
+        self._epoch += 1
+        stop_seen = False
+        while True:
+            try:
+                item = self._speech_queue.get_nowait()
+            except queue.Empty:
+                break
+            if item is _STOP:
+                stop_seen = True
+                continue
+            self._change_pending(-1)
+        if stop_seen:
+            self._speech_queue.put_nowait(_STOP)
+
+    def _process_speech_queue(self) -> None:
+        while True:
+            item = self._speech_queue.get()
+            if item is _STOP:
+                return
+
+            text, emotion = item
+            worker = self._workers[emotion]
+            epoch = self._epoch
+
+            try:
+                if self._epoch != epoch:
+                    continue
+
+                worker.is_synthesizing = True
+                worker.last_used_time = time.time()
+
+                # Lazy auto-reload if this emotion was offloaded while idle
+                if not worker.is_loaded:
+                    worker.load()
+
+                engine = self._engine
+                state = worker.get_state()
+                if engine is None or state is None:
+                    logger.error("Failed to acquire engine or state for emotion %s", emotion)
+                    continue
+
+                with self._engine_lock:
+                    if self._epoch != epoch:
+                        continue
+                    self._dispatch_synthesis_started(emotion)
+                    first = True
+                    for chunk in engine.generate_audio_stream(state, text):
+                        if self._epoch != epoch:
+                            break
+                        audio = chunk.detach().cpu().numpy().reshape(-1).astype(np.float32, copy=False)
+                        self._dispatch_audio_chunk(
+                            audio, engine.sample_rate, text=text if first else "", emotion=emotion
+                        )
+                        first = False
+            except Exception:
+                logger.exception("Synthesis failed for emotion '%s'", emotion)
+            finally:
+                worker.is_synthesizing = False
+                worker.last_used_time = time.time()
+                # Decrement pending before signalling completion so AudioPlayer.is_playing
+                # sees the accurate upstream busy state.
+                self._change_pending(-1)
+                self._dispatch_synthesis_completed(emotion)
 
     def offload_emotion(self, emotion: str) -> bool:
         """Explicitly offload a specific emotion model from memory."""
@@ -388,7 +498,9 @@ class EmotionTTSService:
         for listener in tuple(self._listeners):
             listener.on_synthesis_started()
 
-    def _dispatch_audio_chunk(self, audio: AudioBuffer, rate: int, text: str = "", emotion: str = "neutral") -> None:
+    def _dispatch_audio_chunk(
+        self, audio: AudioBuffer, rate: int, text: str = "", emotion: str = "neutral"
+    ) -> None:
         for listener in tuple(self._listeners):
             try:
                 listener.on_audio_chunk(audio, rate, text=text)

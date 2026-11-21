@@ -61,9 +61,30 @@ echo -e "${CYAN}[3/5]${RESET} Synchronizing Python virtual environment dependenc
 uv sync
 echo -e "${GREEN}✓ Dependencies synchronized.${RESET}"
 
-# 4. Check Ollama service & model
+# Check if .env file exists or if --setup was explicitly requested
+SETUP_REQUESTED=false
+CLEANED_ARGS=()
+for arg in "$@"; do
+    if [[ "$arg" == "--setup" ]]; then
+        SETUP_REQUESTED=true
+    else
+        CLEANED_ARGS+=("$arg")
+    fi
+done
+
+if [ ! -f .env ] || [ "$SETUP_REQUESTED" = true ]; then
+    echo -e "\n${CYAN}[Setup]${RESET} Launching interactive configuration setup..."
+    if [ "$SETUP_REQUESTED" = true ]; then
+        uv run python setup.py --force
+    else
+        uv run python setup.py
+    fi
+fi
+
+# 4. Check Ollama service & model using constants.py / .env
 echo -e "${CYAN}[4/5]${RESET} Checking Ollama service and model..."
-OLLAMA_BASE_URL=$(uv run --no-sync python -c "import constants; print(constants.OLLAMA_BASE_URL)" 2>/dev/null || echo "http://172.19.96.1:11434")
+DEFAULT_OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://localhost:11434}"
+OLLAMA_BASE_URL=$(uv run --no-sync python -c "import constants; print(constants.OLLAMA_BASE_URL)" 2>/dev/null || echo "${DEFAULT_OLLAMA_BASE_URL}")
 MODEL_NAME=$(uv run --no-sync python -c "import constants; print(getattr(constants, 'OLLAMA_MODEL', 'qwen3.5:4b'))" 2>/dev/null || echo "qwen3.5:4b")
 OLLAMA_BASE_URL="${OLLAMA_BASE_URL%/}"
 
@@ -77,6 +98,7 @@ if curl -s "${OLLAMA_BASE_URL}/api/tags" &> /dev/null; then
 else
     echo -e "${YELLOW}Warning: Ollama not reachable at ${OLLAMA_BASE_URL}.${RESET}"
     echo -e "${YELLOW}Please ensure Ollama is installed and running at ${OLLAMA_BASE_URL}.${RESET}"
+    echo -e "${YELLOW}To update OLLAMA_BASE_URL (e.g. your Windows host IP from WSL), edit .env or run: ./run-with-emotion.sh --setup${RESET}"
 fi
 
 # 5. Check and ensure emotion voice safetensors exist
@@ -101,16 +123,17 @@ for arg in "$@"; do
     fi
 done
 
-# Gender selection
-GENDER_ARG=""
+# Gender selection (only prompt if --gender was not already passed)
+HAS_GENDER_ARG=0
 for arg in "$@"; do
     if [[ "$arg" == "--gender" || "$arg" == --gender=* ]]; then
-        GENDER_ARG="$arg"
+        HAS_GENDER_ARG=1
         break
     fi
 done
 
-if [ -z "$GENDER_ARG" ] && [ -t 0 ]; then
+EXTRA_ARGS=()
+if [ "$HAS_GENDER_ARG" -eq 0 ] && [ -t 0 ]; then
     echo -e "\n${BOLD}${MAGENTA}Select Assistant Voice Gender:${RESET}"
     echo -e "  ${BOLD}[1]${RESET} Female (Emotions: neutral, happy, sad, angry)"
     echo -e "  ${BOLD}[2]${RESET} Male   (Emotions: neutral, happy, sad, angry)"
@@ -118,19 +141,14 @@ if [ -z "$GENDER_ARG" ] && [ -t 0 ]; then
     read -r choice || choice="1"
     choice=$(echo "$choice" | tr -d '[:space:]')
     if [ "$choice" == "2" ] || [ "$choice" == "male" ] || [ "$choice" == "m" ]; then
-        GENDER_ARG="--gender=male"
+        EXTRA_ARGS+=("--gender=male")
         echo -e "${GREEN}✓ Selected Gender: Male${RESET}"
     else
-        GENDER_ARG="--gender=female"
+        EXTRA_ARGS+=("--gender=female")
         echo -e "${GREEN}✓ Selected Gender: Female${RESET}"
     fi
 fi
 
-EXTRA_ARGS=()
-if [ -n "$GENDER_ARG" ]; then
-    EXTRA_ARGS+=("$GENDER_ARG")
-fi
-
 # Launch Emotional Voice Assistant CLI
 echo -e "\n${BOLD}${GREEN}Starting Waffle Audio Emotional Voice Assistant...${RESET}\n"
-exec uv run python -m services.conversation.emotion_cli "${EXTRA_ARGS[@]}" "$@"
+exec uv run python -m services.conversation.emotion_cli "${EXTRA_ARGS[@]}" "${CLEANED_ARGS[@]}"

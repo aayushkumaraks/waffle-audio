@@ -347,8 +347,9 @@ class LLMProvider:
         try:
             tool_calls, initial_content = self._stream_or_collect_tools(payload, callbacks)
 
-            # Safety net: parse inline tool-call text if the stream helper returned none
-            if not tool_calls and initial_content:
+            # Safety net (also exercised when _stream_or_collect_tools is mocked):
+            # fast-path skip when no JSON brace or <tool_call> tag is present.
+            if not tool_calls and initial_content and ("{" in initial_content or "<tool_call>" in initial_content):
                 tool_calls = self._detect_text_tool_calls(initial_content)
 
             # If the LLM decided to invoke tools, execute them and stream synthesized reply

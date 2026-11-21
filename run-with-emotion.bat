@@ -39,27 +39,34 @@ for %%A in (%*) do (
 )
 
 setlocal enabledelayedexpansion
-set "GENDER_OPT="
+set "HAS_GENDER=0"
+for %%A in (%*) do (
+    if /i "%%A"=="--gender" set "HAS_GENDER=1"
+    echo %%A | findstr /b /i "--gender=" >nul && set "HAS_GENDER=1"
+)
 
-echo.
-echo Select Assistant Voice Gender:
-echo   [1] Female (Emotions: neutral, happy, sad, angry)
-echo   [2] Male   (Emotions: neutral, happy, sad, angry)
-set /p choice="Enter choice [1-2, default: 1 (Female)]: "
-if defined choice (
-    if "%choice%"=="2" (
-        set "GENDER_OPT=--gender male"
-        echo Using Male emotion voice models.
-    ) else if /i "%choice%"=="male" (
-        set "GENDER_OPT=--gender male"
-        echo Using Male emotion voice models.
+set "GENDER_OPT="
+if "%HAS_GENDER%"=="0" (
+    echo.
+    echo Select Assistant Voice Gender:
+    echo   [1] Female ^(Emotions: neutral, happy, sad, angry^)
+    echo   [2] Male   ^(Emotions: neutral, happy, sad, angry^)
+    set /p choice="Enter choice [1-2, default: 1 (Female)]: "
+    if defined choice (
+        if "!choice!"=="2" (
+            set "GENDER_OPT=--gender male"
+            echo Using Male emotion voice models.
+        ) else if /i "!choice!"=="male" (
+            set "GENDER_OPT=--gender male"
+            echo Using Male emotion voice models.
+        ) else (
+            set "GENDER_OPT=--gender female"
+            echo Using Female emotion voice models.
+        )
     ) else (
         set "GENDER_OPT=--gender female"
         echo Using Female emotion voice models.
     )
-) else (
-    set "GENDER_OPT=--gender female"
-    echo Using Female emotion voice models.
 )
 
 echo.

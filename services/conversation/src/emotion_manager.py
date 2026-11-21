@@ -10,8 +10,7 @@ from typing import Callable
 from constants import SENTENCE_GATE_GAP_TIMEOUT, SENTENCE_GATE_QUICK_FIRE_TIMEOUT
 from models import Message
 from services.conversation.src.emotion_parser import (
-    extract_turn_emotion,
-    parse_sentence_emotion,
+    split_by_emotion,
     strip_emotion_tags,
 )
 from services.conversation.src.sentence_gate import SentenceGate
@@ -52,12 +51,14 @@ class EmotionConversationManager(LLMListener):
         on_emotion_change: Callable[[str], None] | None = None,
         gap_timeout: float = SENTENCE_GATE_GAP_TIMEOUT,
         quick_fire_timeout: float = SENTENCE_GATE_QUICK_FIRE_TIMEOUT,
+        max_history_turns: int = 8,
     ) -> None:
         self._stt = stt
         self._llm = llm
         self._tts = tts
         self._on_user_turn = on_user_turn
         self._on_emotion_change = on_emotion_change
+        self._max_history_turns = max_history_turns
 
         self._stt_listener = _EmotionSTTAdapter(self)
         self._history: list[Message] = []
@@ -123,19 +124,28 @@ class EmotionConversationManager(LLMListener):
         if text:
             self._gate.submit(text)
 
+    def _prune_history(self) -> None:
+        max_messages = self._max_history_turns * 2
+        if len(self._history) > max_messages:
+            self._history = self._history[-max_messages:]
+
     def _trigger_llm(self, text: str) -> None:
         self._history.append(Message(role="user", content=text))
+        self._prune_history()
         if self._on_user_turn is not None:
             try:
                 self._on_user_turn(text)
             except Exception as exc:
                 logger.warning("Error in on_user_turn: %s", exc)
 
+        # Set _pending_generation before enqueueing to avoid racing with fast LLM callbacks
+        with self._state_lock:
+            self._pending_generation = True
         try:
-            self._llm.generate(self._history)
-            with self._state_lock:
-                self._pending_generation = True
+            self._llm.generate(list(self._history))
         except queue.Full:
+            with self._state_lock:
+                self._pending_generation = False
             logger.warning("LLM queue full, dropping utterance: %s", text)
 
     # ------------------------------------------------------------------
@@ -146,7 +156,10 @@ class EmotionConversationManager(LLMListener):
         self._spoken_chars = 0
         self._active_emotion = "neutral"
         if self._on_emotion_change:
-            self._on_emotion_change("neutral")
+            try:
+                self._on_emotion_change("neutral")
+            except Exception:
+                pass
 
     def on_generation_updated(self, text: str) -> None:
         with self._state_lock:
@@ -181,19 +194,38 @@ class EmotionConversationManager(LLMListener):
         # Store clean text in history for natural continuation
         clean_full_text = strip_emotion_tags(text)
         self._history.append(Message(role="assistant", content=clean_full_text))
+        self._prune_history()
 
     def _process_chunk(self, chunk: str) -> None:
-        new_emotion, clean_text = parse_sentence_emotion(chunk, current_emotion=self._active_emotion)
-        if new_emotion != self._active_emotion:
-            self._active_emotion = new_emotion
-            if self._on_emotion_change:
-                try:
-                    self._on_emotion_change(new_emotion)
-                except Exception:
-                    pass
+        # Split on emotion tags so multi-sentence chunks with mid-chunk emotion switches
+        # preserve every emotion transition in order.
+        for new_emotion, clean_text in split_by_emotion(chunk, current_emotion=self._active_emotion):
+            if new_emotion != self._active_emotion:
+                self._active_emotion = new_emotion
+                if self._on_emotion_change:
+                    try:
+                        self._on_emotion_change(new_emotion)
+                    except Exception:
+                        pass
 
-        if clean_text:
+            if clean_text:
+                try:
+                    self._tts.speak(clean_text, emotion=self._active_emotion)
+                except Exception:
+                    logger.exception("Could not queue emotional speech.")
+
+    def barge_in(self) -> None:
+        """Interrupt active LLM generation and flush pending TTS."""
+        with self._state_lock:
+            self._pending_generation = False
+        self._spoken_chars = 0
+        if hasattr(self._llm, "abort"):
             try:
-                self._tts.speak(clean_text, emotion=self._active_emotion)
+                self._llm.abort()
             except Exception:
-                logger.exception("Could not queue emotional speech.")
+                logger.exception("Error aborting LLM generation on barge-in.")
+        if hasattr(self._tts, "interrupt"):
+            try:
+                self._tts.interrupt()
+            except Exception:
+                logger.exception("Error interrupting TTS on barge-in.")

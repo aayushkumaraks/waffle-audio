@@ -156,7 +156,9 @@ def main() -> None:
 
     # 4. Initialize Audio Player
     player = AudioPlayer()
+    player.set_upstream_busy(lambda: emotion_tts.is_busy)
     emotion_tts.add_listener(player)
+    provider.set_tts(emotion_tts)
 
     # 5. Initialize Emotion Conversation Manager
     manager = EmotionConversationManager(
@@ -172,13 +174,6 @@ def main() -> None:
     llm.add_listener(ui)
     player.add_playback_listener(ui)
 
-    # Start backend services
-    player.start()
-    emotion_tts.start()
-    llm.start()
-    manager.start()
-    stt.start()
-
     def audio_callback(indata, frames, time_info, status):
         if player.is_playing:
             return
@@ -190,6 +185,13 @@ def main() -> None:
 
     stream = None
     try:
+        # Start backend services inside try so partial startup failures are always cleaned up
+        player.start()
+        emotion_tts.start()
+        llm.start()
+        manager.start()
+        stt.start()
+
         with _suppress_c_stderr():
             stream = sd.InputStream(
                 samplerate=16000,
@@ -222,11 +224,11 @@ def main() -> None:
             except Exception:
                 pass
 
-        stt.stop()
-        manager.stop()
-        llm.stop()
-        emotion_tts.stop()
-        player.stop()
+        for service in (stt, manager, llm, emotion_tts, player):
+            try:
+                service.stop()
+            except Exception:
+                pass
 
         print("\n" + "=" * 70)
         print("WAFFLE AUDIO — Emotional Conversation Summary")

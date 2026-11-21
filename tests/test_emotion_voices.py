@@ -17,13 +17,16 @@ from constants import (
 )
 from services.conversation.src.emotion_manager import EmotionConversationManager
 from services.conversation.src.emotion_parser import (
+    extract_latest_emotion,
     extract_turn_emotion,
     normalize_emotion,
     parse_sentence_emotion,
+    split_by_emotion,
     strip_emotion_tags,
 )
 from services.llm.src.llm_provider import LLMProvider, LLMProviderConfig
 from services.tts.src.emotion_tts_service import EmotionTTSService, EmotionVoiceWorker
+from services.tts.src.tts_types import TTSServiceError
 
 
 class TestEmotionParser(unittest.TestCase):
@@ -70,6 +73,19 @@ class TestEmotionParser(unittest.TestCase):
         text = "[happy] First sentence. [sad] Second sentence. <emotion>angry</emotion> Done!"
         cleaned = strip_emotion_tags(text)
         self.assertEqual(cleaned, "First sentence. Second sentence. Done!")
+
+    def test_bare_parenthetical_prose_is_preserved(self) -> None:
+        emotion, clean = parse_sentence_emotion("I felt a bit (sad) about it.", current_emotion="neutral")
+        self.assertEqual(emotion, "neutral")
+        self.assertEqual(clean, "I felt a bit (sad) about it.")
+
+    def test_split_by_emotion_preserves_mid_chunk_transitions(self) -> None:
+        segments = split_by_emotion("[sad] Oh no! [happy] Wait, I fixed it!", current_emotion="neutral")
+        self.assertEqual(segments, [("sad", "Oh no!"), ("happy", "Wait, I fixed it!")])
+
+    def test_extract_latest_emotion(self) -> None:
+        self.assertIsNone(extract_latest_emotion("No tags yet"))
+        self.assertEqual(extract_latest_emotion("[sad] Sorry. [happy] Good news!"), "happy")
 
 
 class TestEmotionSafetensorsAndConstants(unittest.TestCase):
@@ -196,6 +212,66 @@ class TestEmotionTTSService(unittest.TestCase):
                 service.stop()
                 self.assertFalse(service.is_started)
 
+    @patch("services.tts.src.emotion_tts_service.load_local_first")
+    def test_emotion_tts_service_preserves_fifo_order_and_interrupt(self, mock_load_first) -> None:
+        """Multi-emotion speech requests must synthesize in strict FIFO order and support interrupt/is_busy."""
+        import numpy as np
+
+        class FakeChunk:
+            def detach(self): return self
+            def cpu(self): return self
+            def numpy(self): return np.zeros(64, dtype=np.float32)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            p = Path(tmp_dir)
+            for emo in ("neutral", "happy", "sad", "angry"):
+                (p / f"{emo}_female.safetensors").write_text("fake")
+
+            spoken_order: list[tuple[str, str]] = []
+            mock_engine = MagicMock()
+            mock_engine.get_state_for_audio_prompt.side_effect = lambda path: {"path": Path(path).stem}
+            mock_engine.sample_rate = 24000
+
+            def fake_stream(state, text):
+                spoken_order.append((state["path"], text))
+                yield FakeChunk()
+
+            mock_engine.generate_audio_stream.side_effect = fake_stream
+            mock_load_first.return_value = mock_engine
+
+            service = EmotionTTSService(gender="female", models_dir=p, offload_idle_seconds=0)
+            try:
+                service.start()
+                service.offload_emotion("sad")
+                service.speak("First sad sentence.", emotion="sad")
+                service.speak("Second neutral sentence.", emotion="neutral")
+                service.speak("Third happy sentence.", emotion="happy")
+
+                deadline = time.time() + 3.0
+                while service.is_busy and time.time() < deadline:
+                    time.sleep(0.02)
+
+                self.assertFalse(service.is_busy)
+                self.assertEqual(
+                    spoken_order,
+                    [
+                        ("sad_female", "First sad sentence."),
+                        ("neutral_female", "Second neutral sentence."),
+                        ("happy_female", "Third happy sentence."),
+                    ],
+                )
+            finally:
+                service.stop()
+
+    @patch("services.tts.src.emotion_tts_service.load_local_first")
+    def test_emotion_tts_service_start_raises_on_missing_model(self, mock_load_first) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            mock_load_first.return_value = MagicMock()
+            service = EmotionTTSService(gender="female", models_dir=tmp_dir, offload_idle_seconds=0)
+            with self.assertRaises(TTSServiceError):
+                service.start()
+            self.assertFalse(service.is_started)
+
 
 class TestEmotionConversationManager(unittest.TestCase):
     def test_manager_parses_emotion_and_dispatches_clean_speech(self) -> None:
@@ -229,6 +305,28 @@ class TestEmotionConversationManager(unittest.TestCase):
             self.assertEqual(history[0].role, "user")
             self.assertEqual(history[1].role, "assistant")
             self.assertEqual(history[1].content, "It is wonderful to meet you today! Have a great day.")
+        finally:
+            manager.stop()
+
+    def test_manager_preserves_multi_emotion_in_single_chunk(self) -> None:
+        mock_stt = MagicMock()
+        mock_llm = MagicMock()
+        mock_tts = MagicMock()
+
+        manager = EmotionConversationManager(stt=mock_stt, llm=mock_llm, tts=mock_tts)
+        manager.start()
+        try:
+            manager.submit_user_text("Tell me something")
+            manager.on_generation_started()
+            manager.on_generation_updated("[sad] I am sorry that happened. [happy] Good news is on the way! ")
+            self.assertEqual(
+                mock_tts.speak.call_args_list,
+                [
+                    unittest.mock.call("I am sorry that happened.", emotion="sad"),
+                    unittest.mock.call("Good news is on the way!", emotion="happy"),
+                ],
+            )
+            self.assertEqual(manager.active_emotion, "happy")
         finally:
             manager.stop()
 
@@ -273,10 +371,20 @@ class TestEmotionConversationUI(unittest.TestCase):
         self.assertIn("e2e_dur", bm)
         self.assertIn("gate_dur", bm)
 
-        # Test rendering
-        layout = ui.render(0)
+        # Test rendering (including brackets that would break unescaped Rich markup)
+        ui.on_user_turn("Test [unclosed bracket and [/red]")
+        ui.on_generation_started()
+        ui.on_generation_updated("[sad] Sorry. [happy] Yay [excited]!")
+        ui.on_generation_completed("[sad] Sorry. [happy] Yay [excited]!")
+        ui.on_playback_completed()
+        self.assertEqual(ui._status, "READY")
+
+        from rich.console import Console
+        console = Console(record=True, width=100)
+        layout = ui.render(0, console=console)
         self.assertIsNotNone(layout)
         self.assertIsNotNone(layout["benchmark"])
+        console.print(layout)
 
 
 if __name__ == "__main__":
