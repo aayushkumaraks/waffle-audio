@@ -163,7 +163,7 @@ If no installed tool matches, Waffle automatically queries DuckDuckGo search and
 
 ### 3. Emotional Voice Assistant (One-Click)
 
-Run the emotional voice assistant with dynamic emotion switching, thread-per-emotion models, in-memory caching, and idle offloading:
+Run the emotional voice assistant with real-time emotion switching, FIFO voice synthesis over cached `.safetensors` voice states, live playback-synced emotion badges, and automatic idle memory offloading:
 
 ```bash
 ./run-with-emotion.sh
@@ -175,16 +175,17 @@ run-with-emotion.bat
 ```
 
 > [!WARNING]
-> **Status: Experimental & Unstable**
-> The multi-emotion voice assistant is an experimental feature currently under active development. Thread-per-emotion workers, prompt-based emotion state parsing, and memory offloading may exhibit instability depending on your local machine and Ollama model quantization.
+> **Status: Experimental**
+> The multi-emotion voice assistant is an experimental feature under active development. Emotion tag compliance and switching accuracy depend on your local hardware and Ollama model quantization.
 
 - **Gender Selection**: Select Female or Male at startup (or pass `--gender female` / `--gender male`).
-- **Emotions Supported**: `neutral`, `happy`, `sad`, `angry` (sourced from CREMA-D dataset).
+- **Setup & WSL Support**: Automatically launches `setup.py` if `.env` is missing, or pass `--setup` to reconfigure `OLLAMA_BASE_URL` (including WSL Windows host gateway IP auto-detection).
+- **Emotions Supported**: `neutral`, `happy`, `sad`, `angry` (sourced from the CREMA-D dataset; common LLM tag synonyms like `[cheerful]`, `[frustrated]`, and `[sorry]` are also normalized automatically).
 - **How It Works**:
-  1. Each emotion model (`.safetensors`) is loaded in its own background worker thread (`tts-worker-neutral`, `tts-worker-happy`, etc.) and cached in RAM.
-  2. The LLM is prompted to prepend emotional tags (`[happy]`, `[sad]`, `[angry]`, `[neutral]`).
-  3. `EmotionParser` strips the tags from spoken audio in real-time and routes each sentence chunk to the corresponding emotion thread.
-  4. Non-neutral models automatically offload their memory tensors if idle beyond `--offload-idle <seconds>`, keeping system RAM free and auto-reloading upon demand.
+  1. The 4 `.safetensors` emotion voice states for the selected gender are preloaded into memory and served by a single **FIFO synthesis worker** (`EmotionTTSService`), guaranteeing strict sentence ordering even when emotions switch mid-reply.
+  2. The LLM (`EMOTION_SYSTEM_PROMPT`) prefixes responses and mid-reply transitions with `[neutral]`, `[happy]`, `[sad]`, or `[angry]`. Internal LLM history retains tags to prevent multi-turn tag drift while TTS and UI receive clean spoken text.
+  3. `EmotionParser` (`split_by_emotion`) splits multi-emotion chunks in order and routes each segment to the matching voice state. `AudioPlayer` forwards the active emotion per chunk so the terminal UI displays live playback-synced badges and per-segment colored history without duplication.
+  4. Non-neutral voice states automatically offload from RAM when idle beyond `--offload-idle <seconds>` (default `120s`) and reload on demand in milliseconds, while `neutral` stays resident.
 - **Verbose Latency Profiling**: Pass `--verbose` or `-v` (e.g. `./run-with-emotion.sh --verbose`) to display a live latency timeline panel comparing turn latency against README target benchmarks, along with a turn breakdown on exit.
 
 ### 4. Headless HTTP API & Web App UI
@@ -201,7 +202,7 @@ bash ./tools/webapp/start.sh
 Or open `http://localhost:3000/ui` when the API server is running with the built bundle. See [tools/webapp/README.md](tools/webapp/README.md).
 
 ### 5. Running Unit Tests
-Waffle Audio features a comprehensive 111-test suite with 100% pass rate:
+Waffle Audio features a comprehensive 200+ test suite with 100% pass rate:
 ```bash
 # Run complete test suite with pytest
 PYTHONPATH=. uv run pytest tests/

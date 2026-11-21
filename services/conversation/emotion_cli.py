@@ -54,6 +54,10 @@ def _setup_logging() -> None:
     ]:
         logging.getLogger(name).setLevel(logging.WARNING)
 
+    # Keep emotion routing and voice-model lifecycle logs visible in logs/emotion_voicechat.log
+    logging.getLogger("services.conversation.src.emotion_manager").setLevel(logging.INFO)
+    logging.getLogger("services.tts.src.emotion_tts_service").setLevel(logging.INFO)
+
 
 @contextlib.contextmanager
 def _suppress_c_stderr():
@@ -139,12 +143,16 @@ def main() -> None:
         signal.signal(signal.SIGTERM, handle_signal)
 
     ui = EmotionConversationUI(gender=gender, verbose=args.verbose)
+    console = Console()
 
     # 1. Initialize STT
     stt = STTService()
 
-    # 2. Initialize LLM with Emotion System Prompt
-    llm_config = LLMProviderConfig(system_prompt=LLMProvider.EMOTION_SYSTEM_PROMPT)
+    # 2. Initialize LLM with Emotion System Prompt (disable blocking MCP tool discovery)
+    llm_config = LLMProviderConfig(
+        system_prompt=LLMProvider.EMOTION_SYSTEM_PROMPT,
+        tools_enabled=False,
+    )
     provider = LLMProvider(llm_config)
     llm = LLMService(provider)
 
@@ -185,24 +193,29 @@ def main() -> None:
 
     stream = None
     try:
-        # Start backend services inside try so partial startup failures are always cleaned up
-        player.start()
-        emotion_tts.start()
-        llm.start()
-        manager.start()
-        stt.start()
+        # Start backend services inside try with a live startup spinner so the terminal is never blank
+        with console.status("[bold cyan]Initializing Emotional Voice Assistant...[/bold cyan]", spinner="dots") as startup_status:
+            startup_status.update("[bold cyan]Starting Audio Player...[/bold cyan]")
+            player.start()
+            startup_status.update(f"[bold cyan]Loading PocketTTS & {gender} emotion voice models...[/bold cyan]")
+            emotion_tts.start()
+            startup_status.update("[bold cyan]Connecting to Ollama LLM...[/bold cyan]")
+            llm.start()
+            startup_status.update("[bold cyan]Starting Emotion Conversation Manager...[/bold cyan]")
+            manager.start()
+            startup_status.update("[bold cyan]Loading Speech-to-Text (Moonshine)...[/bold cyan]")
+            stt.start()
+            startup_status.update("[bold cyan]Opening microphone stream...[/bold cyan]")
+            with _suppress_c_stderr():
+                stream = sd.InputStream(
+                    samplerate=16000,
+                    channels=1,
+                    dtype="float32",
+                    blocksize=512,
+                    callback=audio_callback,
+                )
+                stream.start()
 
-        with _suppress_c_stderr():
-            stream = sd.InputStream(
-                samplerate=16000,
-                channels=1,
-                dtype="float32",
-                blocksize=512,
-                callback=audio_callback,
-            )
-            stream.start()
-
-        console = Console()
         with Live(ui.render(0, console=console), console=console, screen=True, refresh_per_second=10) as live:
             frame = 0
             while not stop_event.is_set():
@@ -241,8 +254,13 @@ def main() -> None:
                 if msg["role"] == "user":
                     print(f"{idx}. [You] {msg['text']}")
                 else:
-                    emo_tag = f" [{msg.get('emotion', 'neutral').upper()}]"
-                    print(f"{idx}. [Waffle{emo_tag}] {msg['text']}")
+                    segments = msg.get("segments")
+                    if segments and len(segments) > 1:
+                        formatted = " ".join(f"[{emo.upper()}] {seg}" for emo, seg in segments)
+                        print(f"{idx}. [Waffle] {formatted}")
+                    else:
+                        emo_tag = f" [{msg.get('emotion', 'neutral').upper()}]"
+                        print(f"{idx}. [Waffle{emo_tag}] {msg['text']}")
 
         if args.verbose and ui.benchmarks:
             from services.conversation.src.emotion_ui import (

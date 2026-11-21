@@ -35,7 +35,10 @@ class TestEmotionParser(unittest.TestCase):
         self.assertEqual(normalize_emotion("SAD"), "sad")
         self.assertEqual(normalize_emotion("  angry  "), "angry")
         self.assertEqual(normalize_emotion("neutral"), "neutral")
-        self.assertEqual(normalize_emotion("excited", default="neutral"), "neutral")
+        self.assertEqual(normalize_emotion("excited", default="neutral"), "happy")
+        self.assertEqual(normalize_emotion("cheerful", default="neutral"), "happy")
+        self.assertEqual(normalize_emotion("frustrated", default="neutral"), "angry")
+        self.assertEqual(normalize_emotion("unknown_mood", default="neutral"), "neutral")
         self.assertEqual(normalize_emotion("", default="happy"), "happy")
         self.assertEqual(normalize_emotion(None, default="neutral"), "neutral")
 
@@ -385,6 +388,58 @@ class TestEmotionConversationUI(unittest.TestCase):
         self.assertIsNotNone(layout)
         self.assertIsNotNone(layout["benchmark"])
         console.print(layout)
+
+        # Verify PROCESSING stays active while waiting for first token (sync_audio_playback(False))
+        # and recovers cleanly on on_generation_failed
+        ui.on_user_turn("Are you there?")
+        self.assertEqual(ui._status, "PROCESSING")
+        ui.sync_audio_playback(False)
+        self.assertEqual(ui._status, "PROCESSING")
+        ui.on_generation_failed("ReadTimeout: timed out")
+        self.assertEqual(ui._status, "READY")
+        self.assertIn("timed out", ui._last_error)
+
+    def test_ui_no_duplication_and_per_segment_emotion_labels(self) -> None:
+        """Verify mid-reply emotion switches show each segment's true emotion and never duplicate text."""
+        from rich.console import Console
+        from services.conversation.src.emotion_ui import EmotionConversationUI
+
+        ui = EmotionConversationUI(gender="female", verbose=False)
+        ui.on_user_turn("I lost my arm yesterday")
+        ui.on_generation_started()
+        full_reply = "[sad] I am deeply sorry to hear that. [neutral] Let me help you right now."
+        ui.on_generation_updated(full_reply)
+        ui.on_generation_completed(full_reply)
+
+        # While playback is in progress, history must NOT contain the assistant turn yet (no duplicate)
+        ui.on_playback_started()
+        ui.on_playback_text_updated("I am deeply sorry to hear that.", emotion="sad", segment_text="I am deeply sorry to hear that.")
+        self.assertEqual(ui._active_emotion, "sad")
+
+        console = Console(record=True, width=120)
+        console.print(ui.render(1, console=console))
+        mid_output = console.export_text()
+        self.assertEqual(mid_output.count("I am deeply sorry to hear that."), 1)
+        self.assertIn("Waffle [SAD]:", mid_output)
+
+        # Second sentence switches to neutral during playback
+        ui.on_playback_text_updated(
+            "I am deeply sorry to hear that. Let me help you right now.",
+            emotion="neutral",
+            segment_text="Let me help you right now.",
+        )
+        self.assertEqual(ui._active_emotion, "neutral")
+        ui.on_playback_completed()
+
+        # After playback completes, history has the assistant turn once with both emotion segments
+        console2 = Console(record=True, width=120)
+        console2.print(ui.render(2, console=console2))
+        final_output = console2.export_text()
+        self.assertEqual(final_output.count("I am deeply sorry to hear that."), 1)
+        self.assertEqual(final_output.count("Let me help you right now."), 1)
+        self.assertIn("Waffle [SAD]:", final_output)
+        self.assertIn("Waffle [NEUTRAL]:", final_output)
+        self.assertEqual(ui.history[-1]["emotion"], "sad")
 
 
 if __name__ == "__main__":

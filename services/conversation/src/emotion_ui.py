@@ -17,6 +17,8 @@ from services.audio.src import AudioPlaybackListener
 from services.conversation.src.emotion_parser import (
     extract_latest_emotion,
     extract_turn_emotion,
+    normalize_emotion,
+    split_by_emotion,
     strip_emotion_tags,
 )
 from services.llm.src import LLMListener
@@ -49,6 +51,21 @@ def _format_diff(observed: float, target: float) -> str:
         return f"[yellow]{diff:+.2f}s (Slower)[/yellow]"
 
 
+def _merge_emotion_segments(segments: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Merge consecutive (emotion, text) segments sharing the same emotion."""
+    merged: list[tuple[str, str]] = []
+    for emo, seg_text in segments:
+        clean_seg = seg_text.strip()
+        if not clean_seg:
+            continue
+        norm_emo = normalize_emotion(emo, default="neutral")
+        if merged and merged[-1][0] == norm_emo:
+            merged[-1] = (norm_emo, f"{merged[-1][1]} {clean_seg}")
+        else:
+            merged.append((norm_emo, clean_seg))
+    return merged
+
+
 class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
     """Rich UI controller displaying dynamic emotion badges, active threads, memory status, and latency benchmarks."""
 
@@ -60,14 +77,17 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
         self._active_emotion: str = "neutral"
         self._worker_statuses: dict[str, dict[str, Any]] = {}
 
-        self._history: list[dict[str, str]] = []
+        self._history: list[dict[str, Any]] = []
         self._current_user: str = ""
         self._current_assistant: str = ""
+        self._current_assistant_segments: list[tuple[str, str]] = []
+        self._pending_assistant_segments: list[tuple[str, str]] = []
         self._user_fragments: list[str] = []
         self._pending_user_turn: str = ""
         self._llm_generated_text: str = ""
         self._is_generating: bool = False
         self._is_playing_audio: bool = False
+        self._last_error: str = ""
 
         # Latency tracking timestamps for verbose mode
         self._t_speech_start: float | None = None
@@ -103,8 +123,11 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
 
     def sync_audio_playback(self, is_playing: bool) -> None:
         with self._lock:
+            was_playing = self._is_playing_audio
             self._is_playing_audio = is_playing
-            if not is_playing and not self._is_generating and self._status == "PROCESSING":
+            # Only return to READY when playback actually transitions True -> False;
+            # otherwise keep PROCESSING visible while waiting for Ollama's first token.
+            if was_playing and not is_playing and not self._is_generating and self._status == "PROCESSING":
                 self._status = "READY"
 
     # ------------------------------------------------------------------
@@ -139,10 +162,30 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
                 self._pending_user_turn = self._current_user
                 self._t_speech_end = time.perf_counter()
 
+    def _commit_pending_assistant_locked(self) -> None:
+        """Commit the completed/spoken assistant turn to history exactly once."""
+        raw_segments = self._pending_assistant_segments or self._current_assistant_segments
+        merged = _merge_emotion_segments(raw_segments)
+        if merged:
+            full_text = " ".join(seg_text for _, seg_text in merged)
+            # Pick first non-neutral emotion as primary label when multiple emotions appear
+            primary_emotion = next((emo for emo, _ in merged if emo != "neutral"), merged[0][0])
+            self._history.append({
+                "role": "assistant",
+                "text": full_text,
+                "emotion": primary_emotion,
+                "segments": merged,
+            })
+        self._current_assistant = ""
+        self._current_assistant_segments = []
+        self._pending_assistant_segments = []
+
     def on_user_turn(self, text: str) -> None:
         clean_text = text.strip()
         with self._lock:
+            self._commit_pending_assistant_locked()
             self._status = "PROCESSING"
+            self._last_error = ""
             self._t_gate_fired = time.perf_counter()
             self._t_first_token = None
             self._t_llm_done = None
@@ -160,6 +203,8 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
             self._user_fragments.clear()
             self._current_user = ""
             self._current_assistant = ""
+            self._current_assistant_segments = []
+            self._pending_assistant_segments = []
             self._llm_generated_text = ""
 
     # ------------------------------------------------------------------
@@ -171,6 +216,8 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
             self._is_generating = True
             self._status = "PROCESSING"
             self._current_assistant = ""
+            self._current_assistant_segments = []
+            self._pending_assistant_segments = []
             self._active_emotion = "neutral"
 
     def on_generation_updated(self, text: str) -> None:
@@ -180,29 +227,34 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
                 self._t_first_token = now
             self._status = "PROCESSING"
             self._llm_generated_text = text
-            self._current_assistant = text
-            detected = extract_latest_emotion(text)
-            if detected is not None:
-                self._active_emotion = detected
+            # Only set active emotion from LLM stream before playback begins;
+            # once audio is playing, playback callbacks own the live emotion badge.
+            if not self._is_playing_audio:
+                detected = extract_latest_emotion(text)
+                if detected is not None:
+                    self._active_emotion = detected
 
     def on_generation_completed(self, text: str) -> None:
         with self._lock:
             now = time.perf_counter()
             self._is_generating = False
             self._t_llm_done = now
-            self._llm_generated_text = text.strip() or self._llm_generated_text.strip()
-            clean_text = strip_emotion_tags(text)
-            detected = extract_latest_emotion(text) or extract_turn_emotion(text, default=self._active_emotion)
-            self._active_emotion = detected
-            if clean_text:
-                self._history.append({
-                    "role": "assistant",
-                    "text": clean_text,
-                    "emotion": detected,
-                })
-            self._current_assistant = ""
-            if not self._is_playing_audio:
+            raw = text.strip() or self._llm_generated_text.strip()
+            self._llm_generated_text = raw
+            self._pending_assistant_segments = _merge_emotion_segments(
+                split_by_emotion(raw, current_emotion="neutral")
+            )
+            if not self._pending_assistant_segments and not self._is_playing_audio:
                 self._status = "READY"
+
+    def on_generation_failed(self, error: str) -> None:
+        with self._lock:
+            self._is_generating = False
+            self._current_assistant = ""
+            self._current_assistant_segments = []
+            self._pending_assistant_segments = []
+            self._last_error = error.strip() or "LLM generation failed"
+            self._status = "READY"
 
     # ------------------------------------------------------------------
     # AudioPlaybackListener
@@ -215,19 +267,32 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
                 self._t_playback_start = now
             self._is_playing_audio = True
 
-    def on_playback_text_updated(self, text: str) -> None:
+    def on_playback_text_updated(
+        self, text: str, emotion: str = "", segment_text: str = ""
+    ) -> None:
         with self._lock:
             self._status = "PROCESSING"
+            if emotion:
+                self._active_emotion = normalize_emotion(emotion, default=self._active_emotion)
             self._current_assistant = text
+            seg = strip_emotion_tags(segment_text or text)
+            if seg:
+                emo = self._active_emotion
+                if segment_text:
+                    self._current_assistant_segments = _merge_emotion_segments(
+                        self._current_assistant_segments + [(emo, seg)]
+                    )
+                else:
+                    self._current_assistant_segments = [(emo, seg)]
 
     def on_playback_completed(self) -> None:
         with self._lock:
             now = time.perf_counter()
             self._is_playing_audio = False
             self._t_playback_end = now
+            self._commit_pending_assistant_locked()
             if not self._is_generating and self._status == "PROCESSING":
                 self._status = "READY"
-            self._current_assistant = ""
 
             # Record benchmark metrics
             last_user_text = "Unknown"
@@ -279,9 +344,23 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
             self._t_playback_end = None
 
     @property
-    def history(self) -> list[dict[str, str]]:
+    def history(self) -> list[dict[str, Any]]:
         with self._lock:
-            return list(self._history)
+            # Include any uncommitted completed turn (e.g. if stopped mid-playback)
+            items = list(self._history)
+            if self._pending_assistant_segments or self._current_assistant_segments:
+                merged = _merge_emotion_segments(
+                    self._pending_assistant_segments or self._current_assistant_segments
+                )
+                if merged:
+                    primary = next((emo for emo, _ in merged if emo != "neutral"), merged[0][0])
+                    items.append({
+                        "role": "assistant",
+                        "text": " ".join(seg_text for _, seg_text in merged),
+                        "emotion": primary,
+                        "segments": merged,
+                    })
+            return items
 
     @property
     def benchmarks(self) -> list[dict]:
@@ -297,12 +376,14 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
             status = self._status
             current_user = self._current_user
             current_assistant = self._current_assistant
+            current_assistant_segments = list(self._current_assistant_segments)
             history = list(self._history)
             active_emotion = self._active_emotion
             is_playing = self._is_playing_audio
             statuses = dict(self._worker_statuses)
             latest_bm = self._latest_benchmark
             verbose = self._verbose
+            last_error = self._last_error
 
         layout = Layout()
         if verbose:
@@ -352,19 +433,20 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
         )
 
         chat_table = Table.grid(expand=True, padding=(0, 1))
-        chat_table.add_column(style="dim", width=14)
+        chat_table.add_column(style="dim", width=18)
         chat_table.add_column(style="white", ratio=1)
 
         for msg in history[-6:]:
             if msg["role"] == "user":
                 chat_table.add_row("[bold cyan]You:[/bold cyan]", f"[cyan]{escape(msg['text'])}[/cyan]")
             else:
-                emo = msg.get("emotion", "neutral")
-                e_color = EMOTION_STYLES.get(emo, EMOTION_STYLES["neutral"])["color"]
-                chat_table.add_row(
-                    f"[bold green]Waffle [{emo.upper()}]:[/bold green]",
-                    f"[{e_color}]{escape(msg['text'])}[/{e_color}]",
-                )
+                segments = msg.get("segments") or [(msg.get("emotion", "neutral"), msg["text"])]
+                for emo, seg_text in segments:
+                    e_color = EMOTION_STYLES.get(emo, EMOTION_STYLES["neutral"])["color"]
+                    chat_table.add_row(
+                        f"[bold green]Waffle [{emo.upper()}]:[/bold green]",
+                        f"[{e_color}]{escape(seg_text)}[/{e_color}]",
+                    )
 
         if current_user:
             chat_table.add_row(
@@ -372,7 +454,14 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
                 f"[bold white]{escape(current_user)}[/bold white]",
             )
 
-        if current_assistant:
+        if current_assistant_segments:
+            for emo, seg_text in current_assistant_segments:
+                e_color = EMOTION_STYLES.get(emo, EMOTION_STYLES["neutral"])["color"]
+                chat_table.add_row(
+                    f"[bold green]Waffle [{emo.upper()}]:[/bold green]",
+                    f"[{e_color}]{escape(seg_text)}[/{e_color}]",
+                )
+        elif current_assistant:
             clean_ast = strip_emotion_tags(current_assistant)
             e_color = EMOTION_STYLES.get(active_emotion, EMOTION_STYLES["neutral"])["color"]
             chat_table.add_row(
@@ -486,6 +575,8 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
             state_text = f"[bold red]{waveform} Listening to microphone...[/bold red]"
         elif status == "PROCESSING":
             state_text = f"[bold yellow]{spinner} Generating emotional reply...[/bold yellow]"
+        elif last_error:
+            state_text = f"[bold red]⚠ LLM error: {escape(last_error[:60])}[/bold red]"
         else:
             state_text = f"[dim green]● Ready (Listening for speech...)[/dim green]"
 

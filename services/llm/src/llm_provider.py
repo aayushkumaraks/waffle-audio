@@ -198,7 +198,7 @@ class LLMProvider:
 
         self._client = httpx.Client(
             base_url=config.base_url,
-            timeout=httpx.Timeout(60.0),
+            timeout=httpx.Timeout(120.0, connect=10.0),
         )
         self._abort_event = threading.Event()
 
@@ -242,7 +242,7 @@ class LLMProvider:
                         "num_predict": OLLAMA_NUM_PREDICT,
                     },
                 },
-                timeout=httpx.Timeout(60.0),
+                timeout=httpx.Timeout(120.0, connect=10.0),
             )
             logger.info("LLM model warmed up with context length %d.", OLLAMA_NUM_CTX)
         except Exception:
@@ -809,14 +809,18 @@ class LLMProvider:
         "You are a helpful voice assistant named Waffle. "
         "Your responses are spoken aloud by an emotional text-to-speech engine. "
         "You MUST follow these rules strictly:\n"
-        "1. You MUST specify your emotional state at the very start of your response using one of the available emotion tags: "
-        "[neutral], [happy], [sad], or [angry]. Example: '[happy] That is wonderful news! I am glad to assist.'\n"
-        "2. If your emotion changes mid-reply, you may prefix sentences with a new emotion tag, e.g. '[sad] I am sorry that happened. [neutral] Let us figure out what to do.'\n"
-        "3. Only use the 4 available emotion tags: [neutral], [happy], [sad], [angry].\n"
-        "4. Reply in 2-3 short sentences only.\n"
-        "5. Use plain English words only — no emojis, no symbols, no markdown, no bullet points, no asterisks, no hashtags.\n"
-        "6. Write out numbers and units in full (e.g. 'three kilometres' not '3km').\n"
-        "7. Do not include any special characters other than standard punctuation (period, comma, question mark, exclamation mark) and the bracketed emotion tag."
+        "1. ALWAYS start EVERY response with one of these 4 exact emotion tags: [neutral], [happy], [sad], or [angry]. Never omit the opening tag.\n"
+        "2. Choose the emotion tag that genuinely matches the topic and tone:\n"
+        "   - Use [sad] for grief, loss, injury, pain, sympathy, comforting someone, apologizing, or telling a sad story.\n"
+        "   - Use [angry] when responding to insults, rudeness, or frustration.\n"
+        "   - Use [happy] for praise, jokes, good news, gratitude, or cheerfulness.\n"
+        "   - Use [neutral] only for plain factual answers or ordinary conversation.\n"
+        "3. If your emotion changes mid-reply, prefix the new sentence with a new tag, e.g. '[sad] I am sorry that happened. [neutral] Let us figure out what to do.'\n"
+        "4. Only use the 4 available emotion tags: [neutral], [happy], [sad], [angry].\n"
+        "5. Reply in 2-3 short sentences only.\n"
+        "6. Use plain English words only — no emojis, no symbols, no markdown, no bullet points, no asterisks, no hashtags.\n"
+        "7. Write out numbers and units in full (e.g. 'three kilometres' not '3km').\n"
+        "8. Do not include any special characters other than standard punctuation (period, comma, question mark, exclamation mark) and the bracketed emotion tag."
     )
 
     @classmethod

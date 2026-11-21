@@ -10,6 +10,7 @@ from typing import Callable
 from constants import SENTENCE_GATE_GAP_TIMEOUT, SENTENCE_GATE_QUICK_FIRE_TIMEOUT
 from models import Message
 from services.conversation.src.emotion_parser import (
+    extract_latest_emotion,
     split_by_emotion,
     strip_emotion_tags,
 )
@@ -62,6 +63,8 @@ class EmotionConversationManager(LLMListener):
 
         self._stt_listener = _EmotionSTTAdapter(self)
         self._history: list[Message] = []
+        # Keep [emotion] tags in the internal LLM history so small models keep emitting tags
+        self._llm_history: list[Message] = []
         self._gate = SentenceGate(
             callback=self._trigger_llm,
             gap_timeout=gap_timeout,
@@ -97,6 +100,7 @@ class EmotionConversationManager(LLMListener):
 
     def reset(self) -> None:
         self._history.clear()
+        self._llm_history.clear()
         self._active_emotion = "neutral"
         logger.info("Emotion conversation history cleared.")
 
@@ -128,9 +132,13 @@ class EmotionConversationManager(LLMListener):
         max_messages = self._max_history_turns * 2
         if len(self._history) > max_messages:
             self._history = self._history[-max_messages:]
+        if len(self._llm_history) > max_messages:
+            self._llm_history = self._llm_history[-max_messages:]
 
     def _trigger_llm(self, text: str) -> None:
-        self._history.append(Message(role="user", content=text))
+        user_msg = Message(role="user", content=text)
+        self._history.append(user_msg)
+        self._llm_history.append(user_msg)
         self._prune_history()
         if self._on_user_turn is not None:
             try:
@@ -142,7 +150,7 @@ class EmotionConversationManager(LLMListener):
         with self._state_lock:
             self._pending_generation = True
         try:
-            self._llm.generate(list(self._history))
+            self._llm.generate(list(self._llm_history))
         except queue.Full:
             with self._state_lock:
                 self._pending_generation = False
@@ -191,10 +199,27 @@ class EmotionConversationManager(LLMListener):
         if remainder:
             self._process_chunk(remainder)
 
-        # Store clean text in history for natural continuation
+        logger.info("[EMOTION LLM RAW] %r", text)
+
+        # Store clean text in public history, and always-tagged text in _llm_history
+        # so small models never drift into omitting [emotion] tags across turns.
         clean_full_text = strip_emotion_tags(text)
+        raw_trimmed = text.strip()
+        if raw_trimmed and extract_latest_emotion(raw_trimmed) is not None:
+            tagged_text = raw_trimmed
+        else:
+            tagged_text = f"[{self._active_emotion}] {clean_full_text}" if clean_full_text else ""
+
         self._history.append(Message(role="assistant", content=clean_full_text))
+        if tagged_text:
+            self._llm_history.append(Message(role="assistant", content=tagged_text))
         self._prune_history()
+
+    def on_generation_failed(self, error: str) -> None:
+        with self._state_lock:
+            self._pending_generation = False
+        self._spoken_chars = 0
+        logger.warning("EmotionConversationManager recovered from LLM failure: %s", error)
 
     def _process_chunk(self, chunk: str) -> None:
         # Split on emotion tags so multi-sentence chunks with mid-chunk emotion switches
@@ -209,6 +234,7 @@ class EmotionConversationManager(LLMListener):
                         pass
 
             if clean_text:
+                logger.info("[EMOTION ROUTE] emotion=%s text=%r", self._active_emotion, clean_text)
                 try:
                     self._tts.speak(clean_text, emotion=self._active_emotion)
                 except Exception:

@@ -6,26 +6,49 @@ import re
 # Supported emotions
 VALID_EMOTIONS: tuple[str, ...] = ("neutral", "happy", "sad", "angry")
 
+# Common LLM emotion tag synonyms mapped to the 4 supported voice models
+_EMOTION_SYNONYMS: dict[str, str] = {
+    "neutral": "neutral",
+    "calm": "neutral",
+    "happy": "happy",
+    "cheerful": "happy",
+    "glad": "happy",
+    "grateful": "happy",
+    "joyful": "happy",
+    "excited": "happy",
+    "sad": "sad",
+    "sorry": "sad",
+    "upset": "sad",
+    "apologetic": "sad",
+    "melancholy": "sad",
+    "angry": "angry",
+    "mad": "angry",
+    "frustrated": "angry",
+    "annoyed": "angry",
+    "furious": "angry",
+}
+_EMOTION_WORDS_REGEX = "|".join(_EMOTION_SYNONYMS.keys())
+
 # Matches:
-#   [happy] or [HAPPY]
+#   [happy] or [HAPPY] (including common synonyms like [cheerful], [frustrated])
 #   [emotion: happy] or [EMOTION: happy]
 #   <emotion>happy</emotion>
 #   (emotion: happy)
 _EMOTION_TAG_PATTERN = re.compile(
-    r"(?:\[(?:emotion:\s*)?(neutral|happy|sad|angry)\]|<emotion>(neutral|happy|sad|angry)</emotion>|\(emotion:\s*(neutral|happy|sad|angry)\))",
+    rf"(?:\[(?:emotion:\s*)?({_EMOTION_WORDS_REGEX})\]|<emotion>({_EMOTION_WORDS_REGEX})</emotion>|\(emotion:\s*({_EMOTION_WORDS_REGEX})\))",
     re.IGNORECASE,
 )
 _WHITESPACE_RE = re.compile(r"\s+")
 
 
 def normalize_emotion(emotion: str | None, default: str = "neutral") -> str:
-    """Normalize emotion string to one of the 4 supported emotion keys."""
+    """Normalize emotion string (or known synonym) to one of the 4 supported emotion keys."""
     if not emotion:
         return default
     cleaned = emotion.strip().lower()
     if cleaned in VALID_EMOTIONS:
         return cleaned
-    return default
+    return _EMOTION_SYNONYMS.get(cleaned, default)
 
 
 def _extract_match_emotion(match: re.Match[str], default: str) -> str:

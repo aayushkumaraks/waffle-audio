@@ -164,8 +164,12 @@ class AudioPlayer(TTSListener):
         audio: AudioBuffer,
         sample_rate: int,
         text: str = "",
+        emotion: str = "",
     ) -> None:
-        self._playback_queue.put_nowait((audio, sample_rate, text))
+        if emotion:
+            self._playback_queue.put_nowait((audio, sample_rate, text, emotion))
+        else:
+            self._playback_queue.put_nowait((audio, sample_rate, text))
 
     def on_synthesis_completed(self) -> None:
         self._synthesizing.clear()
@@ -201,11 +205,15 @@ class AudioPlayer(TTSListener):
                 if item is _STOP:
                     break
 
-                if len(item) == 3:
+                if len(item) == 4:
+                    audio, sample_rate, text, emotion = item
+                elif len(item) == 3:
                     audio, sample_rate, text = item
+                    emotion = ""
                 else:
                     audio, sample_rate = item[0], item[1]
                     text = ""
+                    emotion = ""
 
                 with self._state_lock:
                     if self._interrupted.is_set():
@@ -238,7 +246,7 @@ class AudioPlayer(TTSListener):
                     self._dispatch_playback_started()
                     self._dispatch_playback_monitor(audio, sample_rate)
                     if text:
-                        self._dispatch_playback_text_updated(accumulated)
+                        self._dispatch_playback_text_updated(accumulated, emotion=emotion, segment_text=text)
 
                     stereo = np.column_stack((audio, audio)).astype(np.float32, copy=False)
                     for start in range(0, len(stereo), self._WRITE_SLICE):
@@ -278,10 +286,15 @@ class AudioPlayer(TTSListener):
             except Exception:
                 logger.exception("Error in playback started listener.")
 
-    def _dispatch_playback_text_updated(self, text: str) -> None:
+    def _dispatch_playback_text_updated(
+        self, text: str, emotion: str = "", segment_text: str = ""
+    ) -> None:
         for listener in tuple(self._playback_listeners):
             try:
-                listener.on_playback_text_updated(text)
+                try:
+                    listener.on_playback_text_updated(text, emotion=emotion, segment_text=segment_text)
+                except TypeError:
+                    listener.on_playback_text_updated(text)
             except Exception:
                 logger.exception("Error in playback text listener.")
 

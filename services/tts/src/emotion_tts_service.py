@@ -503,9 +503,12 @@ class EmotionTTSService:
     ) -> None:
         for listener in tuple(self._listeners):
             try:
-                listener.on_audio_chunk(audio, rate, text=text)
+                listener.on_audio_chunk(audio, rate, text=text, emotion=emotion)
             except TypeError:
-                listener.on_audio_chunk(audio, rate)
+                try:
+                    listener.on_audio_chunk(audio, rate, text=text)
+                except TypeError:
+                    listener.on_audio_chunk(audio, rate)
 
     def _dispatch_synthesis_completed(self, emotion: str) -> None:
         for listener in tuple(self._listeners):
