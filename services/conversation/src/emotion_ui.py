@@ -37,7 +37,7 @@ EMOTION_STYLES: dict[str, dict[str, str]] = {
     "neutral": {"color": "cyan", "icon": "✦", "bg": "on blue"},
     "happy": {"color": "bright_yellow", "icon": "🌟", "bg": "on yellow"},
     "sad": {"color": "blue", "icon": "🌧", "bg": "on navy_blue"},
-    "angry": {"color": "bright_red", "icon": "⚡", "bg": "on dark_red"},
+    "whisper": {"color": "magenta", "icon": "🤫", "bg": "on magenta"},
 }
 
 
@@ -487,7 +487,7 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
         models_table.add_column("Thread / RAM", width=14)
         models_table.add_column("Status", width=12)
 
-        for emo in ("neutral", "happy", "sad", "angry"):
+        for emo in ("neutral", "happy", "sad", "whisper"):
             info = statuses.get(emo, {})
             is_loaded = info.get("loaded", False)
             is_synth = info.get("synthesizing", False)

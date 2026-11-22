@@ -59,7 +59,7 @@ def generate_all_emotion_voices(
 
     generated_paths: list[Path] = []
     for wf in wav_files:
-        stem = wf.stem  # e.g., 'angry_female', 'happy_male'
+        stem = wf.stem  # e.g., 'whisper_female', 'happy_male'
         out_safetensors = out_dir / f"{stem}.safetensors"
 
         if out_safetensors.is_file() and not overwrite and out_safetensors.stat().st_size > 1000:

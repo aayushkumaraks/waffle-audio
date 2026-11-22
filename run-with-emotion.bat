@@ -23,8 +23,10 @@ uv sync
 
 echo [3/4] Verifying emotion voice models...
 set "MISSING=0"
-for %%E in (neutral happy sad angry) do (
+for %%E in (neutral happy sad whisper) do (
     if not exist "cloned_voices\%%E_female.safetensors" set "MISSING=1"
+)
+for %%E in (neutral happy sad) do (
     if not exist "cloned_voices\%%E_male.safetensors" set "MISSING=1"
 )
 if "%MISSING%"=="1" (
@@ -49,8 +51,8 @@ set "GENDER_OPT="
 if "%HAS_GENDER%"=="0" (
     echo.
     echo Select Assistant Voice Gender:
-    echo   [1] Female ^(Emotions: neutral, happy, sad, angry^)
-    echo   [2] Male   ^(Emotions: neutral, happy, sad, angry^)
+    echo   [1] Female ^(Emotions: neutral, happy, sad, whisper^)
+    echo   [2] Male   ^(Emotions: neutral, happy, sad^)
     set /p choice="Enter choice [1-2, default: 1 (Female)]: "
     if defined choice (
         if "!choice!"=="2" (

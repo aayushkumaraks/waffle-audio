@@ -82,7 +82,7 @@ User Speech --> STT (Moonshine) --> LLM with [emotion] prompt --> EmotionParser 
                                                         ├── [neutral] voice state (pinned in RAM)
                                                         ├── [happy]   voice state (cached / auto-offload)
                                                         ├── [sad]     voice state (cached / auto-offload)
-                                                        └── [angry]   voice state (cached / auto-offload)
+                                                        └── [whisper] voice state (cached / auto-offload)
                                                                         |
                                                           AudioPlayer (with live emotion sync)
                                                                         |
@@ -90,10 +90,10 @@ User Speech --> STT (Moonshine) --> LLM with [emotion] prompt --> EmotionParser 
 ```
 
 1. **Voice Conditioning & Model Extraction**:
-   - Audio clips for 4 core emotions (`neutral`, `happy`, `sad`, `angry`) across female (CREMA-D actor 1003) and male (actor 1011) speakers are processed using PocketTTS's Mimi speech encoder.
+   - Audio clips for 4 core emotions (`neutral`, `happy`, `sad`, `whisper`) are processed using PocketTTS's Mimi speech encoder.
    - Acoustic conditioning tensors are saved into individual `cloned_voices/<emotion>_<gender>.safetensors` files.
 2. **Single-Gender Model Activation**:
-   - At startup, the user chooses either **Female** or **Male**. Only the selected gender's 4 emotion voice states are loaded into memory.
+   - At startup, the user chooses either **Female** or **Male**. Only the selected gender's emotion voice states are loaded into memory.
 3. **FIFO Synthesis with Cached Voice States**:
    - A single FIFO synthesis worker (`tts-emotion-worker`) processes sentences in exact order across emotion switches, preventing out-of-order audio and `AudioPlayer` state races while supporting `is_busy` and `interrupt()`.
    - Resident voice states switch in sub-10ms without reloading the PocketTTS engine.
@@ -101,12 +101,12 @@ User Speech --> STT (Moonshine) --> LLM with [emotion] prompt --> EmotionParser 
    - An idle watchdog tracks when each voice state was last used. If a non-neutral voice state remains idle beyond `--offload-idle <seconds>` (default `120s`), its tensors are released from RAM.
    - When an offloaded emotion is requested again, it reloads from disk automatically. The `neutral` state remains resident as a baseline fallback.
 5. **LLM Emotion Parsing, History Retention & Live UI Sync**:
-   - `EMOTION_SYSTEM_PROMPT` instructs the LLM when to choose `[neutral]`, `[happy]`, `[sad]`, or `[angry]`. Internal LLM history preserves tags across turns to prevent multi-turn tag drift, while TTS and UI display clean spoken text.
-   - `EmotionParser` splits multi-emotion chunks in order (and normalizes common synonyms like `[cheerful]`, `[frustrated]`, `[sorry]`). `AudioPlayer` forwards the active emotion per spoken chunk so the UI displays playback-synced badges and per-segment colored history.
+   - `EMOTION_SYSTEM_PROMPT` instructs the LLM when to choose `[neutral]`, `[happy]`, `[sad]`, or `[whisper]`. Internal LLM history preserves tags across turns to prevent multi-turn tag drift, while TTS and UI display clean spoken text.
+   - `EmotionParser` splits multi-emotion chunks in order (and normalizes common synonyms like `[cheerful]`, `[whispering]`, `[sorry]`). `AudioPlayer` forwards the active emotion per spoken chunk so the UI displays playback-synced badges and per-segment colored history.
 
 ### Emotion Features
 - **Gender Voice Selection**: Choose either **Female** or **Male** voice model set at startup (or via `--gender`).
-- **4 Emotion States**: Every emotion (`neutral`, `happy`, `sad`, `angry`) has its own `.safetensors` model in `cloned_voices/`.
+- **4 Emotion States**: Every emotion (`neutral`, `happy`, `sad`, `whisper`) has its own `.safetensors` model in `cloned_voices/`.
 - **Strict FIFO Multi-Emotion Playback**: Sentences always play in order even when emotions change mid-reply.
 - **In-Memory Caching with Automatic Offloading**: Models stay in RAM for rapid response and automatically offload when idle (`--offload-idle <seconds>`).
 - **Live Playback-Synced UI**: Header badge, footer status, and per-segment chat history reflect the exact emotion being spoken without duplicate rows.

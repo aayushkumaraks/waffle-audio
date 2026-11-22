@@ -59,7 +59,7 @@ PYTHONPATH=. uv run pytest tests/
 ## 3. Emotional Voice Models Setup (Optional)
 
 Waffle Audio includes an experimental multi-emotion voice cloning system:
-1. Emotion clips (`voices/output/*.wav`) from the CREMA-D dataset provide audio prompts for 4 emotional states (`neutral`, `happy`, `sad`, `angry`) across female (actor 1003) and male (actor 1011) voices.
+1. Emotion clips (`voices/output/*.wav`) provide audio prompts for 4 emotional states (`neutral`, `happy`, `sad`, `whisper`).
 2. Generate all emotion `.safetensors` models into `cloned_voices/`:
 ```bash
 uv run python generate_emotion_voices.py

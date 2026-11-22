@@ -233,7 +233,7 @@ def resolve_voice_spec(voice: str | None, default: str = POCKET_TTS_DEFAULT_VOIC
 # Emotion Voices
 # ---------------------------------------------------------------------------
 
-AVAILABLE_EMOTIONS: tuple[str, ...] = ("neutral", "happy", "sad", "angry")
+AVAILABLE_EMOTIONS: tuple[str, ...] = ("neutral", "happy", "sad", "whisper")
 AVAILABLE_GENDERS: tuple[str, ...] = ("female", "male")
 
 

@@ -33,11 +33,12 @@ class TestEmotionParser(unittest.TestCase):
     def test_normalize_emotion(self) -> None:
         self.assertEqual(normalize_emotion("happy"), "happy")
         self.assertEqual(normalize_emotion("SAD"), "sad")
-        self.assertEqual(normalize_emotion("  angry  "), "angry")
+        self.assertEqual(normalize_emotion("  whisper  "), "whisper")
         self.assertEqual(normalize_emotion("neutral"), "neutral")
         self.assertEqual(normalize_emotion("excited", default="neutral"), "happy")
         self.assertEqual(normalize_emotion("cheerful", default="neutral"), "happy")
-        self.assertEqual(normalize_emotion("frustrated", default="neutral"), "angry")
+        self.assertEqual(normalize_emotion("whispering", default="neutral"), "whisper")
+        self.assertEqual(normalize_emotion("quietly", default="neutral"), "whisper")
         self.assertEqual(normalize_emotion("unknown_mood", default="neutral"), "neutral")
         self.assertEqual(normalize_emotion("", default="happy"), "happy")
         self.assertEqual(normalize_emotion(None, default="neutral"), "neutral")
@@ -48,9 +49,9 @@ class TestEmotionParser(unittest.TestCase):
         self.assertEqual(clean, "Good morning! How can I help you?")
 
     def test_parse_sentence_emotion_case_insensitive(self) -> None:
-        emotion, clean = parse_sentence_emotion("[ANGRY] That is totally unacceptable!")
-        self.assertEqual(emotion, "angry")
-        self.assertEqual(clean, "That is totally unacceptable!")
+        emotion, clean = parse_sentence_emotion("[WHISPER] Keep it quiet!")
+        self.assertEqual(emotion, "whisper")
+        self.assertEqual(clean, "Keep it quiet!")
 
     def test_parse_sentence_emotion_prefix_syntax(self) -> None:
         emotion, clean = parse_sentence_emotion("[emotion: sad] I am sorry to hear that.")
@@ -73,7 +74,7 @@ class TestEmotionParser(unittest.TestCase):
         self.assertEqual(extract_turn_emotion("No emotion tag here.", default="neutral"), "neutral")
 
     def test_strip_emotion_tags(self) -> None:
-        text = "[happy] First sentence. [sad] Second sentence. <emotion>angry</emotion> Done!"
+        text = "[happy] First sentence. [sad] Second sentence. <emotion>whisper</emotion> Done!"
         cleaned = strip_emotion_tags(text)
         self.assertEqual(cleaned, "First sentence. Second sentence. Done!")
 
@@ -92,10 +93,15 @@ class TestEmotionParser(unittest.TestCase):
             split_by_emotion("[normal] Please turn the volume down a bit.", current_emotion="neutral"),
             [("neutral", "Please turn the volume down a bit.")],
         )
-        # Unknown LLM-invented bracketed stage/emotion tags are stripped while keeping active emotion
+        # Known synonym [whispering] maps to whisper
         self.assertEqual(
             split_by_emotion("[happy] Great! [whispering] Keep it quiet.", current_emotion="neutral"),
-            [("happy", "Great!"), ("happy", "Keep it quiet.")],
+            [("happy", "Great!"), ("whisper", "Keep it quiet.")],
+        )
+        # Unknown LLM-invented bracketed stage/emotion tags are stripped while keeping active emotion
+        self.assertEqual(
+            split_by_emotion("[happy] Great! [sighs] Keep going.", current_emotion="neutral"),
+            [("happy", "Great!"), ("happy", "Keep going.")],
         )
         self.assertEqual(
             strip_emotion_tags("[normal] Hello [sighs] world."),
@@ -109,13 +115,17 @@ class TestEmotionParser(unittest.TestCase):
 
 class TestEmotionSafetensorsAndConstants(unittest.TestCase):
     def test_available_constants(self) -> None:
-        self.assertEqual(AVAILABLE_EMOTIONS, ("neutral", "happy", "sad", "angry"))
+        self.assertEqual(AVAILABLE_EMOTIONS, ("neutral", "happy", "sad", "whisper"))
         self.assertEqual(AVAILABLE_GENDERS, ("female", "male"))
 
     def test_generated_safetensors_exist_in_cloned_voices(self) -> None:
-        """Verify that all 8 generated emotion safetensors exist and are valid sizes (>1MB)."""
-        for gender in ("female", "male"):
-            for emotion in ("neutral", "happy", "sad", "angry"):
+        """Verify that all generated emotion safetensors exist and are valid sizes (>1MB)."""
+        expected_by_gender = {
+            "female": ("neutral", "happy", "sad", "whisper"),
+            "male": ("neutral", "happy", "sad"),
+        }
+        for gender, emotions in expected_by_gender.items():
+            for emotion in emotions:
                 path = get_emotion_voice_path(gender, emotion)
                 self.assertTrue(
                     path.is_file(),
@@ -183,7 +193,7 @@ class TestEmotionTTSService(unittest.TestCase):
         """Test EmotionTTSService initializes dedicated threads per emotion and dispatches correctly."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             p = Path(tmp_dir)
-            for emo in ("neutral", "happy", "sad", "angry"):
+            for emo in ("neutral", "happy", "sad", "whisper"):
                 (p / f"{emo}_female.safetensors").write_text("fake")
 
             mock_engine = MagicMock()
@@ -205,7 +215,7 @@ class TestEmotionTTSService(unittest.TestCase):
 
                 # Ensure 4 workers were created for female only
                 statuses = service.get_statuses()
-                self.assertEqual(set(statuses.keys()), {"neutral", "happy", "sad", "angry"})
+                self.assertEqual(set(statuses.keys()), {"neutral", "happy", "sad", "whisper"})
 
                 # Test speak dispatch
                 mock_listener = MagicMock()
@@ -243,7 +253,7 @@ class TestEmotionTTSService(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             p = Path(tmp_dir)
-            for emo in ("neutral", "happy", "sad", "angry"):
+            for emo in ("neutral", "happy", "sad", "whisper"):
                 (p / f"{emo}_female.safetensors").write_text("fake")
 
             spoken_order: list[tuple[str, str]] = []

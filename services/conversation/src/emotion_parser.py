@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 # Supported emotions
-VALID_EMOTIONS: tuple[str, ...] = ("neutral", "happy", "sad", "angry")
+VALID_EMOTIONS: tuple[str, ...] = ("neutral", "happy", "sad", "whisper")
 
 # Common LLM emotion tag synonyms mapped to the 4 supported voice models
 _EMOTION_SYNONYMS: dict[str, str] = {
@@ -49,15 +49,17 @@ _EMOTION_SYNONYMS: dict[str, str] = {
     "empathetic": "sad",
     "disappointed": "sad",
     "regretful": "sad",
-    "angry": "angry",
-    "mad": "angry",
-    "frustrated": "angry",
-    "annoyed": "angry",
-    "furious": "angry",
-    "irritated": "angry",
-    "stern": "angry",
-    "firm": "angry",
-    "outraged": "angry",
+    "whisper": "whisper",
+    "whispering": "whisper",
+    "whispered": "whisper",
+    "soft": "whisper",
+    "softly": "whisper",
+    "quiet": "whisper",
+    "quietly": "whisper",
+    "hushed": "whisper",
+    "secret": "whisper",
+    "secretive": "whisper",
+    "low": "whisper",
 }
 
 # Matches any bracketed/XML/explicit emotion or stage-direction tag so the TTS engine

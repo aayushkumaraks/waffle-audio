@@ -180,10 +180,10 @@ run-with-emotion.bat
 
 - **Gender Selection**: Select Female or Male at startup (or pass `--gender female` / `--gender male`).
 - **Setup & WSL Support**: Automatically launches `setup.py` if `.env` is missing, or pass `--setup` to reconfigure `OLLAMA_BASE_URL` (including WSL Windows host gateway IP auto-detection).
-- **Emotions Supported**: `neutral`, `happy`, `sad`, `angry` (sourced from the CREMA-D dataset; common LLM tag synonyms like `[cheerful]`, `[frustrated]`, and `[sorry]` are also normalized automatically).
+- **Emotions Supported**: `neutral`, `happy`, `sad`, `whisper` (common LLM tag synonyms like `[cheerful]`, `[whispering]`, and `[sorry]` are also normalized automatically).
 - **How It Works**:
-  1. The 4 `.safetensors` emotion voice states for the selected gender are preloaded into memory and served by a single **FIFO synthesis worker** (`EmotionTTSService`), guaranteeing strict sentence ordering even when emotions switch mid-reply.
-  2. The LLM (`EMOTION_SYSTEM_PROMPT`) prefixes responses and mid-reply transitions with `[neutral]`, `[happy]`, `[sad]`, or `[angry]`. Internal LLM history retains tags to prevent multi-turn tag drift while TTS and UI receive clean spoken text.
+  1. The emotion `.safetensors` voice states for the selected gender are preloaded into memory and served by a single **FIFO synthesis worker** (`EmotionTTSService`), guaranteeing strict sentence ordering even when emotions switch mid-reply.
+  2. The LLM (`EMOTION_SYSTEM_PROMPT`) prefixes responses and mid-reply transitions with `[neutral]`, `[happy]`, `[sad]`, or `[whisper]`. Internal LLM history retains tags to prevent multi-turn tag drift while TTS and UI receive clean spoken text.
   3. `EmotionParser` (`split_by_emotion`) splits multi-emotion chunks in order and routes each segment to the matching voice state. `AudioPlayer` forwards the active emotion per chunk so the terminal UI displays live playback-synced badges and per-segment colored history without duplication.
   4. Non-neutral voice states automatically offload from RAM when idle beyond `--offload-idle <seconds>` (default `120s`) and reload on demand in milliseconds, while `neutral` stays resident.
 - **Verbose Latency Profiling**: Pass `--verbose` or `-v` (e.g. `./run-with-emotion.sh --verbose`) to display a live latency timeline panel comparing turn latency against README target benchmarks, along with a turn breakdown on exit.

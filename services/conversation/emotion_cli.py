@@ -82,8 +82,8 @@ def prompt_user_gender() -> str:
     print("  WAFFLE AUDIO — Emotional Voice Assistant")
     print("=" * 60)
     print("Select Assistant Voice Gender:")
-    print("  [1] Female (Emotions: neutral, happy, sad, angry)")
-    print("  [2] Male   (Emotions: neutral, happy, sad, angry)")
+    print("  [1] Female (Emotions: neutral, happy, sad, whisper)")
+    print("  [2] Male   (Emotions: neutral, happy, sad)")
     print("=" * 60)
 
     if not sys.stdin.isatty():

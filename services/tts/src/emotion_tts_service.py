@@ -222,7 +222,15 @@ class EmotionTTSService:
         self._engine = load_local_first(_loader)
 
         try:
-            for worker in self._workers.values():
+            for emotion, worker in list(self._workers.items()):
+                if emotion != "neutral" and not worker.model_path.is_file():
+                    logger.warning(
+                        "Optional emotion voice model missing for [%s_%s] (%s); will fall back to 'neutral'.",
+                        self.gender,
+                        emotion,
+                        worker.model_path.name,
+                    )
+                    continue
                 worker.load()
         except Exception as exc:
             for worker in self._workers.values():
@@ -295,8 +303,9 @@ class EmotionTTSService:
             raise ServiceNotStarted("EmotionTTSService is not started.")
 
         emotion_key = (emotion or "neutral").strip().lower()
-        if emotion_key not in self._workers:
-            logger.warning("Unknown emotion '%s', falling back to 'neutral'.", emotion)
+        worker = self._workers.get(emotion_key)
+        if worker is None or (emotion_key != "neutral" and not worker.model_path.is_file()):
+            logger.warning("Unavailable emotion '%s' for gender '%s', falling back to 'neutral'.", emotion, self.gender)
             emotion_key = "neutral"
 
         self._change_pending(1)
@@ -387,7 +396,7 @@ class EmotionTTSService:
         now = time.time()
         offloaded: list[str] = []
         for emotion, worker in self._workers.items():
-            # Keep neutral pinned resident for instant response; offload happy/sad/angry when idle
+            # Keep neutral pinned resident for instant response; offload happy/sad/whisper when idle
             if emotion == "neutral":
                 continue
 

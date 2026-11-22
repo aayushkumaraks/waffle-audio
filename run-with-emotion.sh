@@ -104,12 +104,20 @@ fi
 # 5. Check and ensure emotion voice safetensors exist
 echo -e "${CYAN}[5/5]${RESET} Verifying emotion voice models..."
 MISSING_MODELS=0
-for emo in neutral happy sad angry; do
-    if [ ! -f "cloned_voices/${emo}_female.safetensors" ] || [ ! -f "cloned_voices/${emo}_male.safetensors" ]; then
+for emo in neutral happy sad whisper; do
+    if [ ! -f "cloned_voices/${emo}_female.safetensors" ]; then
         MISSING_MODELS=1
         break
     fi
 done
+if [ "$MISSING_MODELS" -eq 0 ]; then
+    for emo in neutral happy sad; do
+        if [ ! -f "cloned_voices/${emo}_male.safetensors" ]; then
+            MISSING_MODELS=1
+            break
+        fi
+    done
+fi
 
 if [ "$MISSING_MODELS" -eq 1 ]; then
     echo -e "${YELLOW}Emotion voice safetensors missing. Generating now from voices/output/...${RESET}"
@@ -135,8 +143,8 @@ done
 EXTRA_ARGS=()
 if [ "$HAS_GENDER_ARG" -eq 0 ] && [ -t 0 ]; then
     echo -e "\n${BOLD}${MAGENTA}Select Assistant Voice Gender:${RESET}"
-    echo -e "  ${BOLD}[1]${RESET} Female (Emotions: neutral, happy, sad, angry)"
-    echo -e "  ${BOLD}[2]${RESET} Male   (Emotions: neutral, happy, sad, angry)"
+    echo -e "  ${BOLD}[1]${RESET} Female (Emotions: neutral, happy, sad, whisper)"
+    echo -e "  ${BOLD}[2]${RESET} Male   (Emotions: neutral, happy, sad)"
     echo -ne "\n${BOLD}Enter choice [1-2, default: 1 (Female)]: ${RESET}"
     read -r choice || choice="1"
     choice=$(echo "$choice" | tr -d '[:space:]')
