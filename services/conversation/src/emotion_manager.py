@@ -14,7 +14,7 @@ from services.conversation.src.emotion_parser import (
     split_by_emotion,
     strip_emotion_tags,
 )
-from services.conversation.src.sentence_gate import SentenceGate
+from services.conversation.src.sentence_gate import ClauseChunker, SentenceGate
 from services.llm.src import LLMListener, LLMService
 from services.stt.src import STTListener, STTService
 from services.tts.src import EmotionTTSService
@@ -38,10 +38,6 @@ class _EmotionSTTAdapter(STTListener):
 
 class EmotionConversationManager(LLMListener):
     """Coordinates conversation turns with real-time emotion parsing and voice switching."""
-
-    # Sentence boundary: . ! ? followed by whitespace
-    _SENTENCE_END = re.compile(r"[.!?][\"')\]]*\s")
-    _MIN_SPEECH_CHARS = 20
 
     def __init__(
         self,
@@ -70,10 +66,10 @@ class EmotionConversationManager(LLMListener):
             gap_timeout=gap_timeout,
             quick_fire_timeout=quick_fire_timeout,
         )
+        self._chunker = ClauseChunker()
 
         self._started = False
         self._pending_generation = False
-        self._spoken_chars = 0
         self._active_emotion: str = "neutral"
         self._state_lock = threading.Lock()
 
@@ -161,7 +157,7 @@ class EmotionConversationManager(LLMListener):
     # ------------------------------------------------------------------
 
     def on_generation_started(self) -> None:
-        self._spoken_chars = 0
+        self._chunker.reset()
         self._active_emotion = "neutral"
         if self._on_emotion_change:
             try:
@@ -174,19 +170,8 @@ class EmotionConversationManager(LLMListener):
             if not self._pending_generation:
                 return
 
-        boundary = None
-        for match in self._SENTENCE_END.finditer(text, self._spoken_chars):
-            boundary = match.end()
-
-        if boundary is None:
-            return
-
-        chunk = text[self._spoken_chars:boundary].strip()
-        if len(chunk) < self._MIN_SPEECH_CHARS:
-            return
-
-        self._spoken_chars = boundary
-        self._process_chunk(chunk)
+        for chunk in self._chunker.process_stream(text):
+            self._process_chunk(chunk)
 
     def on_generation_completed(self, text: str) -> None:
         with self._state_lock:
@@ -194,19 +179,18 @@ class EmotionConversationManager(LLMListener):
                 return
             self._pending_generation = False
 
-        remainder = text[self._spoken_chars:].strip()
-        self._spoken_chars = 0
+        remainder = self._chunker.finalize(text)
         if remainder:
             self._process_chunk(remainder)
 
         logger.info("[EMOTION LLM RAW] %r", text)
 
-        # Store clean text in public history, and always-tagged text in _llm_history
-        # so small models never drift into omitting [emotion] tags across turns.
+        # Store clean text in public history, and canonical-tagged text in _llm_history
+        # so small models never drift into omitting or inventing non-canonical [emotion] tags.
         clean_full_text = strip_emotion_tags(text)
-        raw_trimmed = text.strip()
-        if raw_trimmed and extract_latest_emotion(raw_trimmed) is not None:
-            tagged_text = raw_trimmed
+        segments = split_by_emotion(text.strip(), current_emotion="neutral")
+        if segments:
+            tagged_text = " ".join(f"[{emo}] {seg}" for emo, seg in segments)
         else:
             tagged_text = f"[{self._active_emotion}] {clean_full_text}" if clean_full_text else ""
 
@@ -218,7 +202,7 @@ class EmotionConversationManager(LLMListener):
     def on_generation_failed(self, error: str) -> None:
         with self._state_lock:
             self._pending_generation = False
-        self._spoken_chars = 0
+        self._chunker.reset()
         logger.warning("EmotionConversationManager recovered from LLM failure: %s", error)
 
     def _process_chunk(self, chunk: str) -> None:
@@ -244,7 +228,7 @@ class EmotionConversationManager(LLMListener):
         """Interrupt active LLM generation and flush pending TTS."""
         with self._state_lock:
             self._pending_generation = False
-        self._spoken_chars = 0
+        self._chunker.reset()
         if hasattr(self._llm, "abort"):
             try:
                 self._llm.abort()

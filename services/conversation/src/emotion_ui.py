@@ -66,6 +66,19 @@ def _merge_emotion_segments(segments: list[tuple[str, str]]) -> list[tuple[str, 
     return merged
 
 
+def _format_inline_segments(segments: list[tuple[str, str]]) -> Text:
+    """Render one or more (emotion, text) segments inline in a single flowing Rich Text block."""
+    rendered = Text()
+    for idx, (emo, seg_text) in enumerate(segments):
+        if idx > 0:
+            rendered.append(" ")
+        e_info = EMOTION_STYLES.get(emo, EMOTION_STYLES["neutral"])
+        e_color = e_info["color"]
+        rendered.append(f"[{emo.upper()}]", style=f"bold {e_color}")
+        rendered.append(f" {seg_text}", style=e_color)
+    return rendered
+
+
 class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
     """Rich UI controller displaying dynamic emotion badges, active threads, memory status, and latency benchmarks."""
 
@@ -433,7 +446,7 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
         )
 
         chat_table = Table.grid(expand=True, padding=(0, 1))
-        chat_table.add_column(style="dim", width=18)
+        chat_table.add_column(style="dim", width=15)
         chat_table.add_column(style="white", ratio=1)
 
         for msg in history[-6:]:
@@ -441,12 +454,10 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
                 chat_table.add_row("[bold cyan]You:[/bold cyan]", f"[cyan]{escape(msg['text'])}[/cyan]")
             else:
                 segments = msg.get("segments") or [(msg.get("emotion", "neutral"), msg["text"])]
-                for emo, seg_text in segments:
-                    e_color = EMOTION_STYLES.get(emo, EMOTION_STYLES["neutral"])["color"]
-                    chat_table.add_row(
-                        f"[bold green]Waffle [{emo.upper()}]:[/bold green]",
-                        f"[{e_color}]{escape(seg_text)}[/{e_color}]",
-                    )
+                chat_table.add_row(
+                    "[bold green]Waffle:[/bold green]",
+                    _format_inline_segments(segments),
+                )
 
         if current_user:
             chat_table.add_row(
@@ -455,18 +466,15 @@ class EmotionConversationUI(STTListener, LLMListener, AudioPlaybackListener):
             )
 
         if current_assistant_segments:
-            for emo, seg_text in current_assistant_segments:
-                e_color = EMOTION_STYLES.get(emo, EMOTION_STYLES["neutral"])["color"]
-                chat_table.add_row(
-                    f"[bold green]Waffle [{emo.upper()}]:[/bold green]",
-                    f"[{e_color}]{escape(seg_text)}[/{e_color}]",
-                )
+            chat_table.add_row(
+                "[bold green]Waffle:[/bold green]",
+                _format_inline_segments(current_assistant_segments),
+            )
         elif current_assistant:
             clean_ast = strip_emotion_tags(current_assistant)
-            e_color = EMOTION_STYLES.get(active_emotion, EMOTION_STYLES["neutral"])["color"]
             chat_table.add_row(
-                f"[bold green]Waffle [{active_emotion.upper()}]:[/bold green]",
-                f"[{e_color}]{escape(clean_ast)}[/{e_color}]",
+                "[bold green]Waffle:[/bold green]",
+                _format_inline_segments([(active_emotion, clean_ast)]),
             )
 
         body_layout["conversation"].update(

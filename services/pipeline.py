@@ -68,6 +68,7 @@ class UnifiedPipeline:
         self.tts = TTSService(tts_config or TTSConfig())
 
         self.player = AudioPlayer()
+        self.player.set_upstream_busy(lambda: getattr(self.tts, "is_busy", False))
 
         # Connect TTS to Player
         self.tts.add_listener(self.player)
@@ -95,8 +96,9 @@ class UnifiedPipeline:
         )
         self.vad.add_listener(self.barge_in_controller)
 
-        # Feed audio player playback monitor to AEC reference input
-        self.player.add_playback_monitor(self.echo_canceller.feed_reference)
+        # Feed audio player playback monitor to AEC reference input only when AEC is enabled
+        if enable_aec:
+            self.player.add_playback_monitor(self.echo_canceller.feed_reference)
 
         self._started = False
 

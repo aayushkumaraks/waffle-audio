@@ -86,6 +86,22 @@ class TestEmotionParser(unittest.TestCase):
         segments = split_by_emotion("[sad] Oh no! [happy] Wait, I fixed it!", current_emotion="neutral")
         self.assertEqual(segments, [("sad", "Oh no!"), ("happy", "Wait, I fixed it!")])
 
+    def test_normal_and_unknown_bracket_tags_are_stripped_and_mapped(self) -> None:
+        # Regression: LLM emitting [normal] must map to neutral and never be spoken aloud
+        self.assertEqual(
+            split_by_emotion("[normal] Please turn the volume down a bit.", current_emotion="neutral"),
+            [("neutral", "Please turn the volume down a bit.")],
+        )
+        # Unknown LLM-invented bracketed stage/emotion tags are stripped while keeping active emotion
+        self.assertEqual(
+            split_by_emotion("[happy] Great! [whispering] Keep it quiet.", current_emotion="neutral"),
+            [("happy", "Great!"), ("happy", "Keep it quiet.")],
+        )
+        self.assertEqual(
+            strip_emotion_tags("[normal] Hello [sighs] world."),
+            "Hello world.",
+        )
+
     def test_extract_latest_emotion(self) -> None:
         self.assertIsNone(extract_latest_emotion("No tags yet"))
         self.assertEqual(extract_latest_emotion("[sad] Sorry. [happy] Good news!"), "happy")
@@ -420,7 +436,7 @@ class TestEmotionConversationUI(unittest.TestCase):
         console.print(ui.render(1, console=console))
         mid_output = console.export_text()
         self.assertEqual(mid_output.count("I am deeply sorry to hear that."), 1)
-        self.assertIn("Waffle [SAD]:", mid_output)
+        self.assertIn("[SAD] I am deeply sorry to hear that.", mid_output)
 
         # Second sentence switches to neutral during playback
         ui.on_playback_text_updated(
@@ -431,14 +447,14 @@ class TestEmotionConversationUI(unittest.TestCase):
         self.assertEqual(ui._active_emotion, "neutral")
         ui.on_playback_completed()
 
-        # After playback completes, history has the assistant turn once with both emotion segments
-        console2 = Console(record=True, width=120)
+        # After playback completes, history has the assistant turn once with both emotion segments inline
+        console2 = Console(record=True, width=160)
         console2.print(ui.render(2, console=console2))
         final_output = console2.export_text()
         self.assertEqual(final_output.count("I am deeply sorry to hear that."), 1)
         self.assertEqual(final_output.count("Let me help you right now."), 1)
-        self.assertIn("Waffle [SAD]:", final_output)
-        self.assertIn("Waffle [NEUTRAL]:", final_output)
+        self.assertIn("[SAD] I am deeply sorry to hear that. [NEUTRAL] Let me help you right now.", final_output)
+        self.assertEqual(final_output.count("Waffle:"), 1)
         self.assertEqual(ui.history[-1]["emotion"], "sad")
 
 

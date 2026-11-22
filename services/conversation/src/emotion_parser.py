@@ -9,33 +9,67 @@ VALID_EMOTIONS: tuple[str, ...] = ("neutral", "happy", "sad", "angry")
 # Common LLM emotion tag synonyms mapped to the 4 supported voice models
 _EMOTION_SYNONYMS: dict[str, str] = {
     "neutral": "neutral",
+    "normal": "neutral",
+    "default": "neutral",
+    "regular": "neutral",
+    "standard": "neutral",
+    "plain": "neutral",
     "calm": "neutral",
+    "serious": "neutral",
+    "curious": "neutral",
+    "thoughtful": "neutral",
+    "polite": "neutral",
+    "helpful": "neutral",
+    "casual": "neutral",
+    "gentle": "neutral",
+    "matter-of-fact": "neutral",
     "happy": "happy",
     "cheerful": "happy",
     "glad": "happy",
     "grateful": "happy",
     "joyful": "happy",
     "excited": "happy",
+    "friendly": "happy",
+    "warm": "happy",
+    "playful": "happy",
+    "amused": "happy",
+    "delighted": "happy",
+    "enthusiastic": "happy",
+    "relieved": "happy",
+    "hopeful": "happy",
+    "proud": "happy",
     "sad": "sad",
     "sorry": "sad",
     "upset": "sad",
     "apologetic": "sad",
     "melancholy": "sad",
+    "concerned": "sad",
+    "worried": "sad",
+    "sympathetic": "sad",
+    "empathetic": "sad",
+    "disappointed": "sad",
+    "regretful": "sad",
     "angry": "angry",
     "mad": "angry",
     "frustrated": "angry",
     "annoyed": "angry",
     "furious": "angry",
+    "irritated": "angry",
+    "stern": "angry",
+    "firm": "angry",
+    "outraged": "angry",
 }
-_EMOTION_WORDS_REGEX = "|".join(_EMOTION_SYNONYMS.keys())
 
-# Matches:
-#   [happy] or [HAPPY] (including common synonyms like [cheerful], [frustrated])
-#   [emotion: happy] or [EMOTION: happy]
+# Matches any bracketed/XML/explicit emotion or stage-direction tag so the TTS engine
+# never speaks LLM-invented tags like [normal], [polite], or [sighs] aloud:
+#   [happy], [NORMAL], [sighs], [matter-of-fact]
+#   [emotion: happy] or [EMOTION: normal]
 #   <emotion>happy</emotion>
 #   (emotion: happy)
+# Bare parenthetical prose like "(sad)" is intentionally NOT matched.
+_TAG_WORD = r"[a-z][a-z_\-]*(?:\s+[a-z][a-z_\-]*)?"
 _EMOTION_TAG_PATTERN = re.compile(
-    rf"(?:\[(?:emotion:\s*)?({_EMOTION_WORDS_REGEX})\]|<emotion>({_EMOTION_WORDS_REGEX})</emotion>|\(emotion:\s*({_EMOTION_WORDS_REGEX})\))",
+    rf"(?:\[(?:emotion:\s*)?({_TAG_WORD})\]|<emotion>\s*({_TAG_WORD})\s*</emotion>|\(emotion:\s*({_TAG_WORD})\))",
     re.IGNORECASE,
 )
 _WHITESPACE_RE = re.compile(r"\s+")

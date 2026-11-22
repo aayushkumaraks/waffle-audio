@@ -38,6 +38,8 @@ _ICE_GATHERING_TIMEOUT_SECONDS = 10.0
 _DEFAULT_STUN_SERVERS = "stun:stun.l.google.com:19302"
 
 _peer_connections: set[RTCPeerConnection] = set()
+_detached_player_refs: dict[int, tuple[Any, Any]] = {}  # id(pc) -> (tts, player)
+_barge_in_refs: dict[int, tuple[Any, Any]] = {}  # id(pc) -> (vad, barge_in)
 
 
 def _ice_servers() -> list[RTCIceServer]:
@@ -223,11 +225,18 @@ async def create_answer(
     vad: VADService,
     conversation: Any = None,
     aec: Any = None,
+    player: Any = None,
 ) -> dict[str, str]:
     """Accept a browser offer and return an SDP answer with gathered ICE candidates."""
     loop = asyncio.get_running_loop()
     pc = RTCPeerConnection(RTCConfiguration(iceServers=_ice_servers()))
     _peer_connections.add(pc)
+
+    # Detach local server speaker playback while a remote WebRTC session is active
+    # so assistant speech only streams to the browser.
+    if player is not None:
+        tts.remove_listener(player)
+        _detached_player_refs[id(pc)] = (tts, player)
 
     if aec is None:
         from services.audio_processing.src import AcousticEchoCanceller
@@ -237,10 +246,26 @@ async def create_answer(
     tts.add_listener(tts_track)
     pc.addTrack(tts_track)
 
+    barge_in = None
     if conversation is not None:
         from services.audio_processing.src import BargeInController
         barge_in = BargeInController(manager=conversation, tts=tts)
         vad.add_listener(barge_in)
+        _barge_in_refs[id(pc)] = (vad, barge_in)
+
+    def _cleanup_peer() -> None:
+        tts.remove_listener(tts_track)
+        _peer_connections.discard(pc)
+
+        barge_entry = _barge_in_refs.pop(id(pc), None)
+        if barge_entry is not None:
+            v_svc, bi_ctrl = barge_entry
+            v_svc.remove_listener(bi_ctrl)
+
+        player_entry = _detached_player_refs.pop(id(pc), None)
+        if player_entry is not None and not _detached_player_refs:
+            t_svc, p_svc = player_entry
+            t_svc.add_listener(p_svc)
 
     @pc.on("track")
     async def on_track(track: MediaStreamTrack) -> None:
@@ -251,8 +276,7 @@ async def create_answer(
     async def on_state_change() -> None:
         logger.info("WebRTC peer state: %s", pc.connectionState)
         if pc.connectionState in ("failed", "closed", "disconnected"):
-            tts.remove_listener(tts_track)
-            _peer_connections.discard(pc)
+            _cleanup_peer()
 
 
     try:
@@ -275,15 +299,20 @@ async def create_answer(
         )
         return {"sdp": local.sdp, "type": local.type}
     except Exception:
-        tts.remove_listener(tts_track)
-        _peer_connections.discard(pc)
+        _cleanup_peer()
         await pc.close()
         logger.exception("Failed to negotiate WebRTC offer/answer.")
         raise
 
 
 async def close_all() -> None:
-    """Close every active peer connection."""
+    """Close every active peer connection and restore any detached listeners."""
     for pc in list(_peer_connections):
         await pc.close()
     _peer_connections.clear()
+    for vad_svc, bi_ctrl in list(_barge_in_refs.values()):
+        vad_svc.remove_listener(bi_ctrl)
+    _barge_in_refs.clear()
+    for tts_svc, player_svc in list(_detached_player_refs.values()):
+        tts_svc.add_listener(player_svc)
+    _detached_player_refs.clear()

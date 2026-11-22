@@ -49,7 +49,7 @@ def load_local_first(loader: Callable[[], _T]) -> _T:
 
 
 class EmotionVoiceWorker:
-    """Manages an individual emotion voice state in memory with optional standalone worker mode."""
+    """Manages an individual emotion voice state in memory (load, cache, idle offload)."""
 
     def __init__(
         self,
@@ -58,7 +58,7 @@ class EmotionVoiceWorker:
         model_path: Path,
         engine_getter: Any,
         engine_lock: threading.Lock,
-        dispatch_callbacks: dict[str, Any],
+        dispatch_callbacks: dict[str, Any] | None = None,
         queue_size: int = 16,
     ) -> None:
         self.emotion = emotion
@@ -66,13 +66,10 @@ class EmotionVoiceWorker:
         self.model_path = model_path
         self._get_engine = engine_getter
         self._engine_lock = engine_lock
-        self._dispatch = dispatch_callbacks
+        self._dispatch = dispatch_callbacks or {}
 
-        self._queue: queue.Queue[tuple[str, str] | object] = queue.Queue(queue_size)
-        self._thread: threading.Thread | None = None
         self._voice_state: object | None = None
         self._state_lock = threading.Lock()
-        self._started = False
 
         self.last_used_time: float = time.time()
         self.is_synthesizing: bool = False
@@ -126,82 +123,9 @@ class EmotionVoiceWorker:
             logger.info("Offloaded [%s_%s] voice model from memory.", self.gender, self.emotion)
             return True
 
-    def start(self) -> None:
-        """Start standalone worker thread (used if EmotionVoiceWorker is run independently)."""
-        if self._started:
-            return
-        self._started = True
-        self._thread = threading.Thread(
-            target=self._run,
-            name=f"tts-worker-{self.emotion}",
-            daemon=True,
-        )
-        self._thread.start()
-
     def stop(self) -> None:
-        """Stop standalone worker thread and release memory."""
-        if self._started:
-            self._started = False
-            try:
-                self._queue.put_nowait(_STOP)
-            except queue.Full:
-                pass
-            if self._thread and self._thread.is_alive():
-                self._thread.join(timeout=3.0)
-            self._thread = None
+        """Release cached voice state memory."""
         self.offload()
-
-    def submit(self, text: str) -> None:
-        """Enqueue speech text for this emotion (standalone mode)."""
-        if not self._started:
-            raise ServiceNotStarted(f"Worker for {self.emotion} is not started.")
-        try:
-            self._queue.put_nowait((text, self.emotion))
-        except queue.Full as exc:
-            raise SpeechQueueFull(f"Speech queue for {self.emotion} is full.") from exc
-
-    def _run(self) -> None:
-        while self._started:
-            try:
-                item = self._queue.get(timeout=1.0)
-            except queue.Empty:
-                continue
-
-            if item is _STOP:
-                break
-
-            text, emotion = item
-            try:
-                self.is_synthesizing = True
-                self.last_used_time = time.time()
-
-                if not self.is_loaded:
-                    self.load()
-
-                engine = self._get_engine()
-                if engine is None:
-                    continue
-
-                state = self.get_state()
-                if state is None:
-                    logger.error("Failed to acquire state for emotion %s", emotion)
-                    continue
-
-                with self._engine_lock:
-                    self._dispatch["started"](emotion)
-                    first = True
-                    for chunk in engine.generate_audio_stream(state, text):
-                        audio = chunk.detach().cpu().numpy().reshape(-1).astype(np.float32, copy=False)
-                        self._dispatch["chunk"](audio, engine.sample_rate, text=text if first else "", emotion=emotion)
-                        first = False
-
-                self._dispatch["completed"](emotion)
-            except Exception:
-                logger.exception("Synthesis failed in worker %s", self.emotion)
-                self._dispatch["completed"](emotion)
-            finally:
-                self.is_synthesizing = False
-                self.last_used_time = time.time()
 
 
 class EmotionTTSService:

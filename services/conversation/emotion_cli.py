@@ -166,7 +166,6 @@ def main() -> None:
     player = AudioPlayer()
     player.set_upstream_busy(lambda: emotion_tts.is_busy)
     emotion_tts.add_listener(player)
-    provider.set_tts(emotion_tts)
 
     # 5. Initialize Emotion Conversation Manager
     manager = EmotionConversationManager(
@@ -254,13 +253,9 @@ def main() -> None:
                 if msg["role"] == "user":
                     print(f"{idx}. [You] {msg['text']}")
                 else:
-                    segments = msg.get("segments")
-                    if segments and len(segments) > 1:
-                        formatted = " ".join(f"[{emo.upper()}] {seg}" for emo, seg in segments)
-                        print(f"{idx}. [Waffle] {formatted}")
-                    else:
-                        emo_tag = f" [{msg.get('emotion', 'neutral').upper()}]"
-                        print(f"{idx}. [Waffle{emo_tag}] {msg['text']}")
+                    segments = msg.get("segments") or [(msg.get("emotion", "neutral"), msg["text"])]
+                    formatted = " ".join(f"[{emo.upper()}] {seg}" for emo, seg in segments)
+                    print(f"{idx}. [Waffle] {formatted}")
 
         if args.verbose and ui.benchmarks:
             from services.conversation.src.emotion_ui import (
