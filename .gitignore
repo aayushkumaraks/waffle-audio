@@ -9,3 +9,4 @@ voices/
 .env
 .env.*
 !.env.example
+output/
