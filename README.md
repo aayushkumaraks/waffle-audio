@@ -161,7 +161,34 @@ uv run python install_tool.py --preset github     # GitHub repos & issues
 ```
 If no installed tool matches, Waffle automatically queries DuckDuckGo search and speaks the answer aloud with conversational bridge phrases. See [docs/tools-and-mcp.md](docs/tools-and-mcp.md).
 
-### 3. Headless HTTP API & Web App UI
+### 3. Emotional Voice Assistant (One-Click)
+
+Run the emotional voice assistant with real-time emotion switching, FIFO voice synthesis over cached `.safetensors` voice states, live playback-synced emotion badges, and automatic idle memory offloading:
+
+```bash
+./run-with-emotion.sh
+```
+
+On Windows:
+```cmd
+run-with-emotion.bat
+```
+
+> [!WARNING]
+> **Status: Experimental**
+> The multi-emotion voice assistant is an experimental feature under active development. Emotion tag compliance and switching accuracy depend on your local hardware and Ollama model quantization.
+
+- **Gender Selection**: Select Female or Male at startup (or pass `--gender female` / `--gender male`).
+- **Setup & WSL Support**: Automatically launches `setup.py` if `.env` is missing, or pass `--setup` to reconfigure `OLLAMA_BASE_URL` (including WSL Windows host gateway IP auto-detection).
+- **Emotions Supported**: `neutral`, `happy`, `sad`, `whisper` (common LLM tag synonyms like `[cheerful]`, `[whispering]`, and `[sorry]` are also normalized automatically).
+- **How It Works**:
+  1. The emotion `.safetensors` voice states for the selected gender are preloaded into memory and served by a single **FIFO synthesis worker** (`EmotionTTSService`), guaranteeing strict sentence ordering even when emotions switch mid-reply.
+  2. The LLM (`EMOTION_SYSTEM_PROMPT`) prefixes responses and mid-reply transitions with `[neutral]`, `[happy]`, `[sad]`, or `[whisper]`. Internal LLM history retains tags to prevent multi-turn tag drift while TTS and UI receive clean spoken text.
+  3. `EmotionParser` (`split_by_emotion`) splits multi-emotion chunks in order and routes each segment to the matching voice state. `AudioPlayer` forwards the active emotion per chunk so the terminal UI displays live playback-synced badges and per-segment colored history without duplication.
+  4. Non-neutral voice states automatically offload from RAM when idle beyond `--offload-idle <seconds>` (default `120s`) and reload on demand in milliseconds, while `neutral` stays resident.
+- **Verbose Latency Profiling**: Pass `--verbose` or `-v` (e.g. `./run-with-emotion.sh --verbose`) to display a live latency timeline panel comparing turn latency against README target benchmarks, along with a turn breakdown on exit.
+
+### 4. Headless HTTP API & Web App UI
 Start the FastAPI backend service:
 ```bash
 uv run python -m services.api.app
@@ -174,8 +201,8 @@ bash ./tools/webapp/start.sh
 ```
 Or open `http://localhost:3000/ui` when the API server is running with the built bundle. See [tools/webapp/README.md](tools/webapp/README.md).
 
-### 4. Running Unit Tests
-Waffle Audio features a comprehensive 111-test suite with 100% pass rate:
+### 5. Running Unit Tests
+Waffle Audio features a comprehensive 200+ test suite with 100% pass rate:
 ```bash
 # Run complete test suite with pytest
 PYTHONPATH=. uv run pytest tests/
@@ -191,6 +218,8 @@ uv run python -m unittest discover tests
 ```
 ├── run.sh                  # One-click installer & launcher (Linux/WSL)
 ├── run.bat                 # One-click launcher (Windows)
+├── run-with-emotion.sh     # Experimental multi-emotion launcher (Linux/WSL)
+├── run-with-emotion.bat    # Experimental multi-emotion launcher (Windows)
 ├── setup.py                # Interactive setup wizard with Ollama host detection
 ├── clone_voice.py          # Interactive voice cloning CLI
 ├── install_tool.py         # MCP tool installer & DuckDuckGo search tester

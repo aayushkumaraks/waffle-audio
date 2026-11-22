@@ -47,6 +47,10 @@ class LLMListener(ABC):
         """Called to record follow-up LLM stream timings after tool execution."""
         pass
 
+    def on_generation_failed(self, error: str) -> None:
+        """Called when LLM generation fails (e.g. timeout or connection error)."""
+        pass
+
 
 
 
@@ -237,5 +241,12 @@ class LLMService(LLMCallbacks):
                     messages=item,
                     callbacks=self,
                 )
-            except Exception:
+            except Exception as exc:
                 logger.exception("LLM generation failed.")
+                err_msg = str(exc.__cause__ or exc)
+                for listener in tuple(self._listeners):
+                    if hasattr(listener, "on_generation_failed"):
+                        try:
+                            listener.on_generation_failed(err_msg)
+                        except Exception:
+                            logger.debug("Error in listener on_generation_failed", exc_info=True)

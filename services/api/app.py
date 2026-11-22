@@ -166,8 +166,10 @@ class ServiceRuntime:
         llm = LLMService(provider)
 
         tts = TTSService(TTSConfig())
+        provider.set_tts(tts)
 
         player = AudioPlayer()
+        player.set_upstream_busy(lambda: getattr(tts, "is_busy", False))
         tts.add_listener(player)
 
         conversation = ConversationManager(stt=stt, llm=llm, tts=tts)
@@ -365,6 +367,7 @@ async def webrtc_offer(offer: WebRTCOfferRequest) -> dict[str, str]:
         runtime.stt,
         runtime.vad,
         conversation=runtime.conversation,
+        player=runtime.player,
     )
 
 
@@ -383,7 +386,9 @@ def audio_status() -> dict[str, bool]:
     return {"is_playing": runtime.player.is_playing}
 
 
-_WEBAPP_DIR = Path(__file__).resolve().parent.parent.parent / "tools" / "webapp"
+_WEBAPP_ROOT = Path(__file__).resolve().parent.parent.parent / "tools" / "webapp"
+_WEBAPP_DIST = _WEBAPP_ROOT / "dist"
+_WEBAPP_DIR = _WEBAPP_DIST if _WEBAPP_DIST.is_dir() else _WEBAPP_ROOT
 if _WEBAPP_DIR.is_dir():
     app.mount("/ui", StaticFiles(directory=_WEBAPP_DIR, html=True), name="webapp")
 

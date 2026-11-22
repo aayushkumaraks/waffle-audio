@@ -135,29 +135,34 @@ def main() -> None:
         )
         console.log("[green]✓[/green] Core audio drivers loaded")
 
-        # Initialize audio and conversation services
-        status.update("[bold cyan]Initializing Voice Activity Detection (VAD) & Echo Cancellation...[/bold cyan]")
-        from services.audio_processing.src import (
-            AcousticEchoCanceller,
-            BargeInController,
-            VADConfig,
-            VADService,
-        )
-        vad = VADService(VADConfig(min_silence_duration_ms=200, pre_speech_padding_ms=200))
-        aec = AcousticEchoCanceller()
-        console.log("[green]✓[/green] VAD & Echo Cancellation initialized")
+        # Initialize audio preprocessing services only when enabled
+        vad = None
+        aec = None
+        if BARGE_IN_ENABLED:
+            status.update("[bold cyan]Initializing Voice Activity Detection (VAD)...[/bold cyan]")
+            from services.audio_processing.src import (
+                BargeInController,
+                VADConfig,
+                VADService,
+            )
+            vad = VADService(VADConfig(min_silence_duration_ms=200, pre_speech_padding_ms=200))
+            if AEC_ENABLED:
+                from services.audio_processing.src import AcousticEchoCanceller
+                aec = AcousticEchoCanceller()
+            console.log(f"[green]✓[/green] VAD initialized (AEC={'enabled' if aec else 'disabled'})")
+        else:
+            console.log("[dim]•[/dim] Barge-in & AEC disabled (mic muted during playback)")
 
         status.update("[bold cyan]Initializing Speech-to-Text (Moonshine ONNX)...[/bold cyan]")
         from services.stt.src import AudioQueueFull, STTService
         stt = STTService()
         console.log("[green]✓[/green] STT Service initialized")
 
-        status.update(f"[bold cyan]Connecting to LLM ({OLLAMA_MODEL}) & loading MCP tools...[/bold cyan]")
+        status.update(f"[bold cyan]Connecting to LLM ({OLLAMA_MODEL}) & preparing tools...[/bold cyan]")
         from services.llm.src import LLMProvider, LLMProviderConfig, LLMService
         provider = LLMProvider(LLMProviderConfig())
         llm = LLMService(provider)
-        tool_count = len(provider.tool_manager.get_ollama_tools())
-        console.log(f"[green]✓[/green] LLM Service initialized (model: {OLLAMA_MODEL}, tools available: {tool_count})")
+        console.log(f"[green]✓[/green] LLM Service configured (model: {OLLAMA_MODEL})")
 
 
         status.update("[bold cyan]Loading Text-to-Speech engine...[/bold cyan]")
@@ -169,7 +174,8 @@ def main() -> None:
         from services.audio.src import AudioPlayer
         player = AudioPlayer()
         player.set_upstream_busy(lambda: getattr(tts, "is_busy", False))
-        player.add_playback_monitor(aec.feed_reference)
+        if aec is not None:
+            player.add_playback_monitor(aec.feed_reference)
         tts.add_listener(player)
         provider.set_tts(tts)
         console.log("[green]✓[/green] Audio Player & Filler Phrases initialized")
@@ -212,15 +218,16 @@ def main() -> None:
             assistant_name=ASSISTANT_NAME,
             on_user_turn_ignored=ui.on_user_turn_ignored,
         )
-        barge_in = BargeInController(
-            player=player,
-            manager=manager,
-            tts=tts,
-            llm=llm,
-            on_barge_in=ui.on_barge_in,
-        )
-        barge_in.enabled = BARGE_IN_ENABLED
-        vad.add_listener(barge_in)
+        if vad is not None:
+            barge_in = BargeInController(
+                player=player,
+                manager=manager,
+                tts=tts,
+                llm=llm,
+                on_barge_in=ui.on_barge_in,
+            )
+            barge_in.enabled = BARGE_IN_ENABLED
+            vad.add_listener(barge_in)
 
         stt.add_listener(ui)
         llm.add_listener(ui)
@@ -228,9 +235,10 @@ def main() -> None:
         console.log("[green]✓[/green] Real-time event listeners wired")
 
         # Start backend services
-        status.update("[bold cyan]Starting Voice Activity Detection worker...[/bold cyan]")
-        vad.start()
-        console.log("[green]✓[/green] VAD service started")
+        if vad is not None:
+            status.update("[bold cyan]Starting Voice Activity Detection worker...[/bold cyan]")
+            vad.start()
+            console.log("[green]✓[/green] VAD service started")
 
         status.update("[bold cyan]Starting Audio Player worker...[/bold cyan]")
         player.start()
@@ -240,9 +248,10 @@ def main() -> None:
         tts.start()
         console.log("[green]✓[/green] TTS service started")
 
-        status.update("[bold cyan]Starting LLM worker thread...[/bold cyan]")
+        status.update("[bold cyan]Starting LLM worker thread & discovering tools...[/bold cyan]")
         llm.start()
-        console.log("[green]✓[/green] LLM service started")
+        tool_count = len(provider.tool_manager.get_ollama_tools())
+        console.log(f"[green]✓[/green] LLM service started (tools available: {tool_count})")
 
         status.update("[bold cyan]Starting Conversation Manager...[/bold cyan]")
         manager.start()
@@ -257,12 +266,9 @@ def main() -> None:
                 return
             try:
                 audio = indata.astype(np.float32).flatten()
-                if BARGE_IN_ENABLED and AEC_ENABLED:
-                    cleaned = aec.process(audio, 16000)
-                else:
-                    cleaned = audio
+                cleaned = aec.process(audio, 16000) if aec is not None else audio
 
-                if BARGE_IN_ENABLED:
+                if vad is not None:
                     vad.process(cleaned, 16000)
 
                 stt.push(cleaned, 16000)

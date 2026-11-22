@@ -96,6 +96,7 @@ if curl -s "${OLLAMA_BASE_URL}/api/tags" &> /dev/null; then
 else
     echo -e "${YELLOW}Warning: Ollama not reachable at ${OLLAMA_BASE_URL}.${RESET}"
     echo -e "${YELLOW}Please ensure Ollama is installed and running at ${OLLAMA_BASE_URL}.${RESET}"
+    echo -e "${YELLOW}To update OLLAMA_BASE_URL (e.g. your Windows host IP from WSL), edit .env or run: ./run.sh --setup${RESET}"
 fi
 
 for arg in "$@"; do
